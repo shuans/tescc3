@@ -73,9 +73,20 @@ jobs:
           xcode-version: latest-stable
 
       # -----------------------------------------------------------------------
-      # Step 3: 下载 & 安装 Cocos Creator 3.8.8
+      # Step 3: 缓存 Cocos Creator (避免重复下载)
+      # -----------------------------------------------------------------------
+      - name: Cache Cocos Creator
+        id: cache-cocos
+        uses: actions/cache@v4
+        with:
+          path: /Applications/CocosCreator.app
+          key: cocos-creator-3-8-8-${{ runner.os }}
+
+      # -----------------------------------------------------------------------
+      # Step 4: 下载 & 安装 Cocos Creator (仅缓存未命中时)
       # -----------------------------------------------------------------------
       - name: Download & Install Cocos Creator 3.8.8
+        if: steps.cache-cocos.outputs.cache-hit != 'true'
         id: install-cocos
         run: |
           COCOS_ZIP="/tmp/CocosCreator-3.8.8.zip"
@@ -109,8 +120,10 @@ jobs:
           ls -la "$COCOS_EXTRACT/"
 
           echo "Installing to /Applications..."
-          # 使用 sudo 复制到 /Applications
           sudo cp -R "$COCOS_EXTRACT/CocosCreator.app" /Applications/
+
+          echo "Fixing permissions (Cocos Creator needs to write to its own bundle)..."
+          sudo chown -R "$USER:staff" /Applications/CocosCreator.app
 
           echo "Verifying installation..."
           if [ -f "$COCOS_APP/Contents/MacOS/CocosCreator" ]; then
@@ -127,7 +140,7 @@ jobs:
           echo "installed=true" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
-      # Step 4: 验证安装
+      # Step 5: 验证安装
       # -----------------------------------------------------------------------
       - name: Verify Installation
         run: |
@@ -159,7 +172,7 @@ jobs:
           xcodebuild -version
 
       # -----------------------------------------------------------------------
-      # Step 5: 初始化 Hello World 例子项目
+      # Step 6: 初始化 Hello World 例子项目
       # -----------------------------------------------------------------------
       - name: Initialize Hello World Example Project
         run: |
@@ -198,7 +211,7 @@ jobs:
           find "$PROJECT_DIR" -maxdepth 3 -not -path '*/\.*' | head -50
 
       # -----------------------------------------------------------------------
-      # Step 6: 构建 iOS 项目
+      # Step 7: 构建 iOS 项目
       #   Cocos Creator 命令行构建:
       #   CocosCreator.app --project <path> --build "platform=ios;..."
       #
@@ -250,7 +263,7 @@ jobs:
           echo "=== Build Exit Code: $BUILD_EXIT_CODE ==="
 
       # -----------------------------------------------------------------------
-      # Step 7: 检查构建产物
+      # Step 8: 检查构建产物
       # -----------------------------------------------------------------------
       - name: Inspect Build Output
         run: |
@@ -271,7 +284,7 @@ jobs:
           find "${{ github.workspace }}/build" -maxdepth 3 2>/dev/null || echo "(empty)"
 
       # -----------------------------------------------------------------------
-      # Step 8: 上传 iOS Xcode 项目为构建产物
+      # Step 9: 上传 iOS Xcode 项目为构建产物
       #   产物包含:
       #     - Xcode 项目文件 (.xcodeproj)
       #     - 游戏资源 (data/)
@@ -296,7 +309,7 @@ jobs:
           retention-days: 30
 
       # -----------------------------------------------------------------------
-      # Step 9: 上传 Log (便于调试)
+      # Step 10: 上传 Log (便于调试)
       # -----------------------------------------------------------------------
       - name: Upload Build Logs
         if: always()
@@ -310,7 +323,7 @@ jobs:
           retention-days: 7
 
       # -----------------------------------------------------------------------
-      # Step 10: 总结
+      # Step 11: 总结
       # -----------------------------------------------------------------------
       - name: Build Summary
         if: always()
