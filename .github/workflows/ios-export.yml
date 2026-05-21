@@ -253,12 +253,11 @@ jobs:
           echo "Build config:"
           cat "$BUILD_CFG"
 
-          # 执行构建 (不掩盖错误)
+          # 执行构建
           BUILD_EXIT_CODE=0
-          perl -e 'alarm shift; exec @ARGV' 3600 \
-            "$COCOS_BIN" \
-              --project "$PROJECT_DIR" \
-              --build "$BUILD_ARGS" \
+          "$COCOS_BIN" \
+            --project "$PROJECT_DIR" \
+            --build "$BUILD_ARGS" \
           2>&1 || BUILD_EXIT_CODE=$?
 
           echo "exit_code=$BUILD_EXIT_CODE" >> "$GITHUB_OUTPUT"
@@ -274,6 +273,7 @@ jobs:
       # Step 8: 检查构建产物
       # -----------------------------------------------------------------------
       - name: Inspect Build Output
+        if: always()
         run: |
           BUILD_DIR="${{ github.workspace }}/build"
           echo "=== Build Output Structure ==="
@@ -299,6 +299,7 @@ jobs:
       #     open build/ios/proj/xxx.xcodeproj
       # -----------------------------------------------------------------------
       - name: Upload iOS Xcode Project
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           # 产物名称
