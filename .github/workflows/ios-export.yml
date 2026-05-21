@@ -242,7 +242,7 @@ jobs:
 
           # 生成完整构建配置
           BUILD_CFG="${{ github.workspace }}/build-config.json"
-          python3 -c "import json; cfg = {'platform': 'ios', 'buildPath': '${{ github.workspace }}/build', 'startScene': '$SCENE_UUID', 'scenes': [{'uuid': '$SCENE_UUID'}], 'packages': {'ios': {'packageName': 'com.cocos.example.ios'}}}; json.dump(cfg, open('$BUILD_CFG','w'), indent=2)"
+          python3 -c "import json; cfg = {'platform': 'ios', 'buildPath': '${{ github.workspace }}/build', 'startScene': '$SCENE_UUID', 'scenes': [{'uuid': '$SCENE_UUID'}], 'useDebug': false, 'packages': {'ios': {'packageName': 'com.cocos.example.ios'}}}; json.dump(cfg, open('$BUILD_CFG','w'), indent=2)"
 
           BUILD_ARGS="configPath=$BUILD_CFG"
           if [ "${{ github.event.inputs.debug }}" = "true" ]; then
@@ -274,34 +274,54 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # Step 8: 修复 Xcode 项目中的路径 (CI → 本地标准路径)
+      # Step 8: Embed CocosFramework + 修复 Xcode 项目路径
+      #   useDebug=false 使 Cocos Creator 使用预编译框架而非源码。
+      #   我们把框架拷贝到 artifact 中，并修复 path/sourceTree，
+      #   这样用户无需安装 Cocos Creator 即可编译。
       # -----------------------------------------------------------------------
-      - name: Fix Xcode Project Paths
+      - name: Embed CocosFramework & Fix Xcode Project Paths
         run: |
           PROJ_DIR="${{ github.workspace }}/build/ios/proj"
           PBXPROJ="$PROJ_DIR/hello-world.xcodeproj/project.pbxproj"
 
+          # 1. 拷贝预编译 CocosFramework 到项目内
+          echo "Copying prebuilt iOS frameworks into artifact..."
+          PREBUILT_SRC="$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native/prebuilt/ios"
+          FRAMEWORKS_DST="$PROJ_DIR/Frameworks"
+          if [ -d "$PREBUILT_SRC" ]; then
+            mkdir -p "$FRAMEWORKS_DST"
+            cp -R "$PREBUILT_SRC/" "$FRAMEWORKS_DST/"
+            echo "Prebuilt frameworks copied ($(du -sh "$FRAMEWORKS_DST" | cut -f1))"
+          else
+            echo "WARNING: Prebuilt directory not found at $PREBUILT_SRC"
+          fi
+
+          # 2. 修复绝对路径
           echo "Fixing absolute paths for local use..."
-
-          # CI 上的 Cocos Creator 安装路径 → 本地标准路径 /Applications
           CI_COCOS="$HOME/CocosCreator.app"
-          LOCAL_COCOS="/Applications/CocosCreator.app"
-
-          # CI 构建数据路径 → 相对 proj/ 的路径 (../data/ 等)
           CI_BUILD="${{ github.workspace }}/build/ios"
 
+          # 2a. 框架文件引用: 从绝对路径改为相对路径 + sourceTree 改为 SOURCE_ROOT
+          #     path = "/Users/runner/CocosCreator.app/.../libcocos2d.xcframework" → Frameworks/libcocos2d.xcframework
+          #     sourceTree = "<absolute>" → "SOURCE_ROOT"
           sed -i '' \
-            -e "s|$CI_COCOS|$LOCAL_COCOS|g" \
-            -e "s|$CI_BUILD/|../|g" \
+            "s|path = \"$PREBUILT_SRC/\(.*\)\"; sourceTree = \"<absolute>\"|path = \"Frameworks/\1\"; sourceTree = \"SOURCE_ROOT\"|g" \
             "$PBXPROJ"
 
+          # 2b. 框架搜索路径 build setting
+          sed -i '' "s|$PREBUILT_SRC|Frameworks|g" "$PBXPROJ"
+
+          # 2c. CI 构建数据路径 → 相对 proj/ 的上级
+          sed -i '' "s|$CI_BUILD/|../|g" "$PBXPROJ"
+
+          # 3. 修复 scheme 文件 (ReferencedContainer)
           echo "Fixing scheme file..."
           SCHEME_FILE=$(find "$PROJ_DIR/hello-world.xcodeproj" -name "*.xcscheme" 2>/dev/null | head -1)
           if [ -f "$SCHEME_FILE" ]; then
             sed -i '' "s|$CI_BUILD/proj/||g" "$SCHEME_FILE"
           fi
 
-          echo "✅ Paths fixed for local Cocos Creator at $LOCAL_COCOS"
+          echo "✅ CocosFramework embedded + paths fixed"
 
       # -----------------------------------------------------------------------
       # Step 9: 检查构建产物
