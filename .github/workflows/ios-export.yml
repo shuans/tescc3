@@ -224,20 +224,19 @@ jobs:
         run: |
           COCOS_BIN="$HOME/CocosCreator.app/Contents/MacOS/CocosCreator"
           PROJECT_DIR="${{ github.workspace }}/CocosExample"
-          DEBUG_MODE="${{ github.event.inputs.debug == 'true' && 'true' || 'false' }}"
-
           echo "=== iOS Build Configuration ==="
           echo "Cocos Creator: $COCOS_BIN"
           echo "Project: $PROJECT_DIR"
           echo "Build Output: ${{ github.workspace }}/build"
-          echo "Debug: $DEBUG_MODE"
+          echo "Debug: ${{ github.event.inputs.debug }}"
 
-          # 构建命令参数
           BUILD_ARGS="platform=ios"
           BUILD_ARGS="${BUILD_ARGS};buildPath=${{ github.workspace }}/build"
-          BUILD_ARGS="${BUILD_ARGS};debug=${DEBUG_MODE}"
-          # iOS bundle identifier
-          BUILD_ARGS="${BUILD_ARGS};nativePackName=com.cocos.example.ios"
+          BUILD_ARGS="${BUILD_ARGS};packages.ios.packageName=com.cocos.example.ios"
+          # debug 是布尔参数，仅当 true 时传入
+          if [ "${{ github.event.inputs.debug }}" = "true" ]; then
+            BUILD_ARGS="${BUILD_ARGS};debug=true"
+          fi
 
           echo "Build args: $BUILD_ARGS"
 
