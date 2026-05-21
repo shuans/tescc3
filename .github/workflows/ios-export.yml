@@ -185,16 +185,7 @@ jobs:
             cp "$PKG_JSON" "${PKG_JSON}.bak"
 
             # 使用 Python 更新 JSON (macOS 自带 Python3)
-            python3 -c "
-import json
-with open('$PKG_JSON', 'r') as f:
-    data = json.load(f)
-# 更新引擎版本到 3.8.8
-data['version'] = '3.8.8'
-with open('$PKG_JSON', 'w') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-"
+            python3 -c "import json; d=json.load(open('$PKG_JSON')); d['version']='3.8.8'; json.dump(d, open('$PKG_JSON','w'), indent=2)"
             echo "Updated package.json:"
             cat "$PKG_JSON"
           fi
