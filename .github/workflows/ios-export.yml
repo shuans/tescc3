@@ -242,7 +242,7 @@ jobs:
 
           # 生成完整构建配置
           BUILD_CFG="${{ github.workspace }}/build-config.json"
-          python3 -c "import json; cfg = {'platform': 'ios', 'buildPath': '${{ github.workspace }}/build', 'startScene': '$SCENE_UUID', 'scenes': [{'uuid': '$SCENE_UUID'}], 'useDebug': false, 'packages': {'ios': {'packageName': 'com.cocos.example.ios'}}}; json.dump(cfg, open('$BUILD_CFG','w'), indent=2)"
+          python3 -c "import json; cfg = {'platform': 'ios', 'buildPath': '${{ github.workspace }}/build', 'startScene': '$SCENE_UUID', 'scenes': [{'uuid': '$SCENE_UUID'}], 'useDebug': False, 'packages': {'ios': {'packageName': 'com.cocos.example.ios'}}}; json.dump(cfg, open('$BUILD_CFG','w'), indent=2)"
 
           BUILD_ARGS="configPath=$BUILD_CFG"
           if [ "${{ github.event.inputs.debug }}" = "true" ]; then
