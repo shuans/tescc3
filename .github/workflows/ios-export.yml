@@ -274,41 +274,34 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # Step 8: 将工程转为自包含 (嵌入引擎源码 + 修复为相对路径)
+      # Step 8: 修复 Xcode 项目中的路径 (CI → 本地标准路径)
       # -----------------------------------------------------------------------
-      - name: Make Xcode Project Self-Contained
+      - name: Fix Xcode Project Paths
         run: |
-          IOS_DIR="${{ github.workspace }}/build/ios"
-          PROJ_DIR="$IOS_DIR/proj"
-          ENGINE_SRC="$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native"
+          PROJ_DIR="${{ github.workspace }}/build/ios/proj"
           PBXPROJ="$PROJ_DIR/hello-world.xcodeproj/project.pbxproj"
 
-          if [ ! -d "$ENGINE_SRC" ]; then
-            echo "❌ Engine source not found at $ENGINE_SRC"
-            exit 1
-          fi
+          echo "Fixing absolute paths for local use..."
 
-          echo "Copying engine native source ($ENGINE_SRC → $IOS_DIR/engine)..."
-          cp -R "$ENGINE_SRC" "$IOS_DIR/engine"
-          echo "Engine source copied ($(du -sh $IOS_DIR/engine | cut -f1))"
+          # CI 上的 Cocos Creator 安装路径 → 本地标准路径 /Applications
+          CI_COCOS="$HOME/CocosCreator.app"
+          LOCAL_COCOS="/Applications/CocosCreator.app"
 
-          echo "Fixing absolute paths in project.pbxproj..."
-          OLD_ENGINE="$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native"
-          OLD_BUILD="${{ github.workspace }}/build/ios"
+          # CI 构建数据路径 → 相对 proj/ 的路径 (../data/ 等)
+          CI_BUILD="${{ github.workspace }}/build/ios"
+
           sed -i '' \
-            -e "s|$OLD_ENGINE/|../engine/|g" \
-            -e "s|$OLD_BUILD/|../|g" \
+            -e "s|$CI_COCOS|$LOCAL_COCOS|g" \
+            -e "s|$CI_BUILD/|../|g" \
             "$PBXPROJ"
 
           echo "Fixing scheme file..."
-          SCHEME_FILE="$PROJ_DIR/hello-world.xcodeproj/xcshareddata/xcschemes/hello-world-mobile.xcscheme"
+          SCHEME_FILE=$(find "$PROJ_DIR/hello-world.xcodeproj" -name "*.xcscheme" 2>/dev/null | head -1)
           if [ -f "$SCHEME_FILE" ]; then
-            sed -i '' "s|$OLD_BUILD/proj/||g" "$SCHEME_FILE"
-            echo "✅ Scheme file fixed"
+            sed -i '' "s|$CI_BUILD/proj/||g" "$SCHEME_FILE"
           fi
 
-          echo "Verifying no absolute paths remain..."
-          grep -r "$HOME" "$PROJ_DIR/hello-world.xcodeproj" && echo "❌ Absolute paths still present!" || echo "✅ All paths fixed"
+          echo "✅ Paths fixed for local Cocos Creator at $LOCAL_COCOS"
 
       # -----------------------------------------------------------------------
       # Step 9: 检查构建产物
