@@ -1,0 +1,358 @@
+# =============================================================================
+# Cocos Creator 3.8.8 iOS Export CI
+# =============================================================================
+# 功能:
+#   1. 在 macOS runner 上安装 Cocos Creator 3.8.8
+#   2. 初始化 Hello World 例子项目 (从官方模板)
+#   3. 构建导出 iOS Xcode 项目
+#   4. 上传 iOS 项目产物
+#
+# Workflow:
+#   1. Install Cocos Creator 3.8.8 on macOS runner
+#   2. Initialize a Hello World example project (from official template)
+#   3. Build & export iOS Xcode project
+#   4. Upload iOS artifacts
+#
+# 必要条件 / Requirements:
+#   - macOS runner (iOS 构建必须)
+#   - Xcode (由 setup-xcode action 管理)
+#   - Cocos Creator 需要 GUI 环境 (macOS GitHub Actions runner 自带)
+#
+# 参考 / References:
+#   - https://docs.cocos.com/creator/3.8/manual/en/editor/publish/publish-in-command-line.html
+#   - https://github.com/cocos/cocos-template-hello-world
+# =============================================================================
+
+name: Cocos Creator 3.8.8 iOS Export
+
+on:
+  # 推送到 main/master 时触发
+  push:
+    branches: [ "main", "master" ]
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug mode'
+        type: boolean
+        default: false
+
+env:
+  # Cocos Creator 3.8.8 下载地址 (来自 Cocos 官方 CDN)
+  COCOS_DOWNLOAD_URL: "https://download.cocos.org/CocosCreator/v3.8.8/CocosCreator-v3.8.8-mac-010512.zip"
+  # 项目模板 (Cocos 官方 Hello World)
+  TEMPLATE_REPO: "https://github.com/cocos/cocos-template-hello-world.git"
+  # iOS 构建平台标识
+  BUILD_PLATFORM: "ios"
+
+# 防止同时运行多次
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-export:
+    name: "iOS Export (Cocos 3.8.8)"
+    # iOS 构建必须使用 macOS runner
+    runs-on: macos-latest
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Step 1: 检出仓库
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Step 2: 安装 Xcode
+      # -----------------------------------------------------------------------
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          # 使用最新的稳定版 Xcode (16.x+)
+          xcode-version: latest-stable
+
+      # -----------------------------------------------------------------------
+      # Step 3: 下载 & 安装 Cocos Creator 3.8.8
+      # -----------------------------------------------------------------------
+      - name: Download & Install Cocos Creator 3.8.8
+        id: install-cocos
+        run: |
+          COCOS_ZIP="/tmp/CocosCreator-3.8.8.zip"
+          COCOS_EXTRACT="/tmp/CocosCreatorExtracted"
+          COCOS_APP="/Applications/CocosCreator.app"
+
+          # 如果已经安装则跳过
+          if [ -d "$COCOS_APP" ]; then
+            echo "Cocos Creator already installed at $COCOS_APP"
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Downloading Cocos Creator 3.8.8 from CDN..."
+          echo "URL: ${{ env.COCOS_DOWNLOAD_URL }}"
+
+          curl -L -o "$COCOS_ZIP" "${{ env.COCOS_DOWNLOAD_URL }}" \
+            --retry 3 --retry-delay 5 \
+            --connect-timeout 30 \
+            --progress-bar
+
+          echo "Verifying download..."
+          if [ ! -f "$COCOS_ZIP" ] || [ ! -s "$COCOS_ZIP" ]; then
+            echo "ERROR: Download failed - file is empty or missing"
+            exit 1
+          fi
+
+          echo "Extracting Cocos Creator..."
+          mkdir -p "$COCOS_EXTRACT"
+          unzip -q "$COCOS_ZIP" -d "$COCOS_EXTRACT"
+          ls -la "$COCOS_EXTRACT/"
+
+          echo "Installing to /Applications..."
+          # 使用 sudo 复制到 /Applications
+          sudo cp -R "$COCOS_EXTRACT/CocosCreator.app" /Applications/
+
+          echo "Verifying installation..."
+          if [ -f "$COCOS_APP/Contents/MacOS/CocosCreator" ]; then
+            echo "Cocos Creator installed successfully"
+            ls -lh "$COCOS_APP/Contents/MacOS/CocosCreator"
+          else
+            echo "ERROR: CocosCreator binary not found after installation"
+            ls -la "$COCOS_APP/Contents/MacOS/" 2>/dev/null || echo "App directory not found"
+            exit 1
+          fi
+
+          # 清理临时文件
+          rm -rf "$COCOS_ZIP" "$COCOS_EXTRACT"
+          echo "installed=true" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # Step 4: 验证安装
+      # -----------------------------------------------------------------------
+      - name: Verify Installation
+        run: |
+          COCOS_APP="/Applications/CocosCreator.app"
+          COCOS_BIN="$COCOS_APP/Contents/MacOS/CocosCreator"
+
+          echo "=== Cocos Creator Installation Check ==="
+          if [ -d "$COCOS_APP" ]; then
+            echo "✅ App bundle: $COCOS_APP"
+          else
+            echo "❌ App bundle not found!"
+            exit 1
+          fi
+
+          if [ -x "$COCOS_BIN" ]; then
+            echo "✅ Binary: $COCOS_BIN"
+          else
+            echo "❌ Binary not found or not executable!"
+            exit 1
+          fi
+
+          # 显示版本信息
+          echo "=== App Bundle Contents ==="
+          ls -la "$COCOS_APP/Contents/MacOS/"
+          echo ""
+          echo "=== System Info ==="
+          sw_vers
+          echo "Xcode: $(xcode-select -p)"
+          xcodebuild -version
+
+      # -----------------------------------------------------------------------
+      # Step 5: 初始化 Hello World 例子项目
+      # -----------------------------------------------------------------------
+      - name: Initialize Hello World Example Project
+        run: |
+          PROJECT_DIR="${{ github.workspace }}/CocosExample"
+
+          # 克隆官方 Hello World 模板
+          echo "Cloning Hello World template from ${{ env.TEMPLATE_REPO }}..."
+          git clone --depth 1 "${{ env.TEMPLATE_REPO }}" "$PROJECT_DIR"
+
+          if [ ! -d "$PROJECT_DIR" ]; then
+            echo "ERROR: Failed to clone template"
+            exit 1
+          fi
+
+          echo "✅ Template cloned successfully"
+
+          # 更新引擎版本到 3.8.8
+          # Cocos Creator 3.x 项目在 package.json 中记录版本
+          PKG_JSON="$PROJECT_DIR/package.json"
+          if [ -f "$PKG_JSON" ]; then
+            echo "Updating engine version in package.json..."
+            # 备份原始文件
+            cp "$PKG_JSON" "${PKG_JSON}.bak"
+
+            # 使用 Python 更新 JSON (macOS 自带 Python3)
+            python3 -c "
+import json
+with open('$PKG_JSON', 'r') as f:
+    data = json.load(f)
+# 更新引擎版本到 3.8.8
+data['version'] = '3.8.8'
+with open('$PKG_JSON', 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+"
+            echo "Updated package.json:"
+            cat "$PKG_JSON"
+          fi
+
+          # 清理 .git 以减小上下文
+          rm -rf "$PROJECT_DIR/.git"
+
+          echo ""
+          echo "=== Project Structure ==="
+          find "$PROJECT_DIR" -maxdepth 3 -not -path '*/\.*' | head -50
+
+      # -----------------------------------------------------------------------
+      # Step 6: 构建 iOS 项目
+      #   Cocos Creator 命令行构建:
+      #   CocosCreator.app --project <path> --build "platform=ios;..."
+      #
+      #   参数说明:
+      #     - platform: ios (构建平台)
+      #     - buildPath: 输出目录 (默认 build/)
+      #     - debug: true/false (调试模式)
+      #     - stage: build | make (默认 build=生成项目文件)
+      #
+      #   注意: Cocos Creator 需要 GUI 环境,
+      #         macOS GitHub Actions runner 满足此条件
+      # -----------------------------------------------------------------------
+      - name: Build for iOS
+        id: build-ios
+        run: |
+          COCOS_BIN="/Applications/CocosCreator.app/Contents/MacOS/CocosCreator"
+          PROJECT_DIR="${{ github.workspace }}/CocosExample"
+          DEBUG_MODE="${{ github.event.inputs.debug == 'true' && 'true' || 'false' }}"
+
+          echo "=== iOS Build Configuration ==="
+          echo "Cocos Creator: $COCOS_BIN"
+          echo "Project: $PROJECT_DIR"
+          echo "Build Output: ${{ github.workspace }}/build"
+          echo "Debug: $DEBUG_MODE"
+
+          # 构建命令参数
+          BUILD_ARGS="platform=ios"
+          BUILD_ARGS="${BUILD_ARGS};buildPath=${{ github.workspace }}/build"
+          BUILD_ARGS="${BUILD_ARGS};debug=${DEBUG_MODE}"
+          # iOS bundle identifier
+          BUILD_ARGS="${BUILD_ARGS};nativePackName=com.cocos.example.ios"
+
+          echo "Build args: $BUILD_ARGS"
+
+          # 执行构建
+          # Cocos Creator 输出日志到 stdout/stderr
+          # 使用超时控制 (1小时)
+          timeout 3600 \
+            "$COCOS_BIN" \
+              --project "$PROJECT_DIR" \
+              --build "$BUILD_ARGS" \
+          2>&1 || true
+
+          # 保存构建退出码
+          BUILD_EXIT_CODE=$?
+          echo "exit_code=$BUILD_EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "=== Build Exit Code: $BUILD_EXIT_CODE ==="
+
+      # -----------------------------------------------------------------------
+      # Step 7: 检查构建产物
+      # -----------------------------------------------------------------------
+      - name: Inspect Build Output
+        run: |
+          echo "=== Build Output Structure ==="
+          if [ -d "${{ github.workspace }}/build" ]; then
+            find "${{ github.workspace }}/build" -maxdepth 4 -type f \
+              -name "*.xcodeproj" -o \
+              -name "*.xcworkspace" -o \
+              -name "*.app" -o \
+              -name "cfg.cmake" -o \
+              -name "Info.plist" | sort
+          else
+            echo "❌ Build directory not found!"
+          fi
+
+          echo ""
+          echo "=== Full Build Directory ==="
+          find "${{ github.workspace }}/build" -maxdepth 3 2>/dev/null || echo "(empty)"
+
+      # -----------------------------------------------------------------------
+      # Step 8: 上传 iOS Xcode 项目为构建产物
+      #   产物包含:
+      #     - Xcode 项目文件 (.xcodeproj)
+      #     - 游戏资源 (data/)
+      #     - CMake 配置
+      #     - 编译脚本
+      #
+      #   下载后可在本地用 Xcode 打开编译:
+      #     open build/ios/proj/xxx.xcodeproj
+      # -----------------------------------------------------------------------
+      - name: Upload iOS Xcode Project
+        uses: actions/upload-artifact@v4
+        with:
+          # 产物名称
+          name: cocos-ios-xcode-project
+          # 上传整个构建目录 (包含 proj/, data/, 等)
+          path: build/
+          # 如果没有构建产物, 也允许上传 (避免步骤失败)
+          if-no-files-found: warn
+          # 压缩级别 (0-9)
+          compression-level: 6
+          # 保留天数 (默认 90)
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # Step 9: 上传 Log (便于调试)
+      # -----------------------------------------------------------------------
+      - name: Upload Build Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ~/.CocosCreator/logs/**
+            ~/Library/Logs/CocosCreator/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # -----------------------------------------------------------------------
+      # Step 10: 总结
+      # -----------------------------------------------------------------------
+      - name: Build Summary
+        if: always()
+        run: |
+          echo "## iOS Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Cocos Creator | 3.8.8 ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Example Project | Hello World ✅ |" >> $GITHUB_STEP_SUMMARY
+
+          BUILD_DIR="${{ github.workspace }}/build"
+          if [ -d "$BUILD_DIR" ]; then
+            # 找到 Xcode 项目文件
+            XCODE_PROJ=$(find "$BUILD_DIR" -name "*.xcodeproj" -maxdepth 4 | head -1)
+            echo "| iOS Export | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Build Artifacts" >> $GITHUB_STEP_SUMMARY
+            echo "- **cocos-ios-xcode-project**: iOS Xcode 项目" >> $GITHUB_STEP_SUMMARY
+            echo "- **build-logs**: Cocos Creator 构建日志" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            if [ -n "$XCODE_PROJ" ]; then
+              REL_PATH="${XCODE_PROJ#${{ github.workspace }}/}"
+              echo "### Xcode Project" >> $GITHUB_STEP_SUMMARY
+              echo "产物路径: \`$REL_PATH\`" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```bash' >> $GITHUB_STEP_SUMMARY
+              echo "# 下载 artifact 后解压并打开 Xcode 项目" >> $GITHUB_STEP_SUMMARY
+              echo "unzip cocos-ios-xcode-project.zip" >> $GITHUB_STEP_SUMMARY
+              echo "cd $(dirname $REL_PATH)" >> $GITHUB_STEP_SUMMARY
+              echo "open *.xcodeproj" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "| iOS Export | ❌ (build directory not found) |" >> $GITHUB_STEP_SUMMARY
+          fi

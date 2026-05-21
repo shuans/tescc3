@@ -1,0 +1,19 @@
+# Cocos Creator
+build/
+temp/
+library/
+node_modules/
+.local/
+*.iml
+.idea/
+.vscode/
+*.user
+*.hmap
+*.xcuserdata
+*.xcworkspace/xcuserdata/
+DerivedData/
+Pods/
+*.app
+*.ipa
+*.dSYM.zip
+*.dSYM
