@@ -230,18 +230,18 @@ jobs:
           echo "Build Output: ${{ github.workspace }}/build"
           echo "Debug: ${{ github.event.inputs.debug }}"
 
-          # iOS 平台配置 (Cocos Creator 从项目 settings 读取)
-          IOS_CFG_DIR="$PROJECT_DIR/settings/v2/packages"
-          mkdir -p "$IOS_CFG_DIR"
-          python3 -c "import json; json.dump({'packageName': 'com.cocos.example.ios'}, open('$IOS_CFG_DIR/ios.json','w'), indent=2)"
+          # 生成完整构建配置
+          BUILD_CFG="${{ github.workspace }}/build-config.json"
+          python3 -c "import json; cfg = {'platform': 'ios', 'buildPath': '${{ github.workspace }}/build', 'packages': {'ios': {'packageName': 'com.cocos.example.ios'}}}; json.dump(cfg, open('$BUILD_CFG','w'), indent=2)"
 
-          BUILD_ARGS="platform=ios"
-          BUILD_ARGS="${BUILD_ARGS};buildPath=${{ github.workspace }}/build"
+          BUILD_ARGS="configPath=$BUILD_CFG"
           if [ "${{ github.event.inputs.debug }}" = "true" ]; then
             BUILD_ARGS="${BUILD_ARGS};debug=true"
           fi
 
           echo "Build args: $BUILD_ARGS"
+          echo "Build config:"
+          cat "$BUILD_CFG"
 
           # 执行构建
           # Cocos Creator 输出日志到 stdout/stderr
