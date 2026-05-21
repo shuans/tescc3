@@ -161,30 +161,28 @@ jobs:
           echo "=== App Bundle Contents ==="
           ls -la "$COCOS_APP/Contents/MacOS/"
 
-          # 探索引擎原生目录结构 (用于诊断路径)
+          # 探索引擎原生目录结构 (深度)
           echo ""
-          echo "=== Engine Native Structure (depth 5) ==="
-          ENGINE_PATHS=(
-            "$COCOS_APP/Contents/Sources/assets/3d/engine/native"
-            "$COCOS_APP/Contents/Resources/resources/3d/engine/native"
-          )
-          for p in "${ENGINE_PATHS[@]}"; do
-            if [ -d "$p" ]; then
-              echo "Found: $p"
-              find "$p" -maxdepth 5 -type d 2>/dev/null | head -30
-              echo "---"
-              break
-            fi
-          done
-          # 如果都没找到，全局搜索
-          if ! [ -d "${ENGINE_PATHS[0]}" ] && ! [ -d "${ENGINE_PATHS[1]}" ]; then
-            echo "Searching for native engine directory..."
-            find "$COCOS_APP/Contents" -path "*/native" -type d 2>/dev/null | head -5
-            echo "---"
-            find "$COCOS_APP/Contents" -path "*/prebuilt" -type d 2>/dev/null | head -5
-            echo "---"
-            find "$COCOS_APP/Contents" -name "*.xcframework" -maxdepth 10 2>/dev/null | head -5
+          echo "=== Engine Native Root (depth 10, dirs only) ==="
+          ENGINE_ROOT=$(find "$COCOS_APP/Contents" -path "*/3d/engine/native" -type d 2>/dev/null | head -1)
+          if [ -z "$ENGINE_ROOT" ]; then
+            ENGINE_ROOT=$(find "$COCOS_APP/Contents" -name "native" -path "*/engine/*" -type d 2>/dev/null | head -1)
           fi
+          if [ -n "$ENGINE_ROOT" ]; then
+            echo "ENGINE_ROOT: $ENGINE_ROOT"
+            find "$ENGINE_ROOT" -maxdepth 10 -type d 2>/dev/null | head -50
+          else
+            echo "No engine native directory found"
+          fi
+
+          echo ""
+          echo "=== Prebuilt / Library Search ==="
+          echo "--- prebuilt dirs ---"
+          find "$COCOS_APP/Contents" -path "*/prebuilt" -type d 2>/dev/null | head -10
+          echo "--- static libs (.a) ---"
+          find "$COCOS_APP/Contents" -name "*.a" -maxdepth 12 2>/dev/null | head -20
+          echo "--- xcframeworks ---"
+          find "$COCOS_APP/Contents" -name "*.xcframework" -maxdepth 12 2>/dev/null | head -10
 
           echo ""
           echo "=== System Info ==="
@@ -310,54 +308,48 @@ jobs:
           PROJ_DIR="${{ github.workspace }}/build/ios/proj"
           PBXPROJ="$PROJ_DIR/hello-world.xcodeproj/project.pbxproj"
 
-          # 1. 定位并拷贝预编译 CocosFramework 到项目内
-          echo "Locating prebuilt iOS frameworks in CocosCreator.app..."
-          # Cocos Creator 3.8.8 路径: Contents/Sources/assets/3d/engine/native/
-          ENGINE_NATIVE="$HOME/CocosCreator.app/Contents/Sources/assets/3d/engine/native"
-          # 旧版本兜底: Contents/Resources/resources/3d/engine/native/
-          ENGINE_NATIVE_LEGACY="$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native"
+          # 1. 发现并拷贝预编译引擎库
+          echo "Discovering engine prebuilt/libraries in CocosCreator.app..."
+          COCOS_APP="$HOME/CocosCreator.app"
           FRAMEWORKS_DST="$PROJ_DIR/Frameworks"
-          PREBUILT_SRC=""
 
-          if [ -d "$ENGINE_NATIVE/prebuilt/ios" ]; then
-            PREBUILT_SRC="$ENGINE_NATIVE/prebuilt/ios"
-          elif [ -d "$ENGINE_NATIVE_LEGACY/prebuilt/ios" ]; then
-            PREBUILT_SRC="$ENGINE_NATIVE_LEGACY/prebuilt/ios"
-          else
-            echo "WARNING: prebuilt/ios not found, searching broadly..."
-            PREBUILT_FOUND=$(find "$HOME/CocosCreator.app/Contents" -path "*/prebuilt/ios" -type d 2>/dev/null | head -1)
-            if [ -n "$PREBUILT_FOUND" ]; then
-              PREBUILT_SRC="$PREBUILT_FOUND"
-            fi
+          # 策略: 找到引擎的所有 .a/.xcframework 并拷贝, 然后修复 pbxproj 路径
+          # 先定位 engine native 根目录
+          ENGINE_ROOT=$(find "$COCOS_APP/Contents" -path "*/3d/engine/native" -type d 2>/dev/null | head -1)
+          if [ -z "$ENGINE_ROOT" ]; then
+            ENGINE_ROOT=$(find "$COCOS_APP/Contents" -name "native" -path "*/engine/*" -type d 2>/dev/null | head -1)
           fi
+          echo "ENGINE_ROOT: ${ENGINE_ROOT:-not found}"
 
-          if [ -n "$PREBUILT_SRC" ] && [ -d "$PREBUILT_SRC" ]; then
+          if [ -d "$ENGINE_ROOT/prebuilt/ios" ]; then
+            echo "Found prebuilt/ios, copying..."
             mkdir -p "$FRAMEWORKS_DST"
-            cp -R "$PREBUILT_SRC/" "$FRAMEWORKS_DST/"
-            echo "Prebuilt frameworks copied from: $PREBUILT_SRC"
-            echo "Size: $(du -sh "$FRAMEWORKS_DST" | cut -f1)"
+            cp -R "$ENGINE_ROOT/prebuilt/ios/" "$FRAMEWORKS_DST/"
+            echo "Copied: $(du -sh "$FRAMEWORKS_DST" | cut -f1)"
             ls -la "$FRAMEWORKS_DST/"
           else
-            echo "WARNING: No prebuilt iOS frameworks found to embed"
-            echo "Search attempted paths:"
-            echo "  - $ENGINE_NATIVE/prebuilt/ios"
-            echo "  - $ENGINE_NATIVE_LEGACY/prebuilt/ios"
+            echo "No prebuilt/ios directory at $ENGINE_ROOT/prebuilt/ios"
+            echo "Searching for iOS libraries elsewhere..."
+            # 搜索 .xcframework
+            XCFRAMEWORKS=$(find "$COCOS_APP/Contents" -name "*.xcframework" -maxdepth 12 2>/dev/null)
+            if [ -n "$XCFRAMEWORKS" ]; then
+              echo "Found xcframeworks:"
+              echo "$XCFRAMEWORKS" | head -10
+            fi
+            # 搜索 .a 文件 (可能属于引擎)
+            A_LIBS=$(find "$COCOS_APP/Contents" -name "*.a" -maxdepth 12 2>/dev/null | head -20)
+            if [ -n "$A_LIBS" ]; then
+              echo "Found .a libs:"
+              echo "$A_LIBS" | head -20
+            fi
+            echo "WARNING: No engine libraries found to embed"
           fi
 
           # 2. 修复绝对路径
           echo "Fixing absolute paths for local use..."
-          CI_COCOS="$HOME/CocosCreator.app"
           CI_BUILD="${{ github.workspace }}/build/ios"
 
-          # 2a. 框架/库文件引用 (如果 PREBUILT_SRC 存在)
-          if [ -n "$PREBUILT_SRC" ]; then
-            sed -i '' \
-              "s|path = \"$PREBUILT_SRC/\(.*\)\"; sourceTree = \"<absolute>\"|path = \"Frameworks/\1\"; sourceTree = \"SOURCE_ROOT\"|g" \
-              "$PBXPROJ"
-            sed -i '' "s|$PREBUILT_SRC|Frameworks|g" "$PBXPROJ"
-          fi
-
-          # 2b. CI 构建数据路径 → 相对 proj/ 的上级
+          # 2a. CI 构建数据路径 → 相对 proj/ 的上级
           sed -i '' "s|$CI_BUILD/|../|g" "$PBXPROJ"
 
           # 3. 修复 scheme 文件 (ReferencedContainer)
