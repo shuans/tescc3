@@ -260,17 +260,58 @@ jobs:
             --build "$BUILD_ARGS" \
           2>&1 || BUILD_EXIT_CODE=$?
 
+          # Cocos Creator 退出码:
+          #   0  / 36 = Build success
+          #   32    = Invalid build parameters
+          #   34    = Unexpected build error
           echo "exit_code=$BUILD_EXIT_CODE" >> "$GITHUB_OUTPUT"
           echo ""
           echo "=== Build Exit Code: $BUILD_EXIT_CODE ==="
 
-          if [ "$BUILD_EXIT_CODE" -ne 0 ]; then
+          if [ "$BUILD_EXIT_CODE" -eq 32 ] || [ "$BUILD_EXIT_CODE" -eq 34 ]; then
             echo "❌ Build failed with exit code $BUILD_EXIT_CODE"
             exit "$BUILD_EXIT_CODE"
           fi
 
       # -----------------------------------------------------------------------
-      # Step 8: 检查构建产物
+      # Step 8: 将工程转为自包含 (嵌入引擎源码 + 修复为相对路径)
+      # -----------------------------------------------------------------------
+      - name: Make Xcode Project Self-Contained
+        run: |
+          IOS_DIR="${{ github.workspace }}/build/ios"
+          PROJ_DIR="$IOS_DIR/proj"
+          ENGINE_SRC="$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native"
+          PBXPROJ="$PROJ_DIR/hello-world.xcodeproj/project.pbxproj"
+
+          if [ ! -d "$ENGINE_SRC" ]; then
+            echo "❌ Engine source not found at $ENGINE_SRC"
+            exit 1
+          fi
+
+          echo "Copying engine native source ($ENGINE_SRC → $IOS_DIR/engine)..."
+          cp -R "$ENGINE_SRC" "$IOS_DIR/engine"
+          echo "Engine source copied ($(du -sh $IOS_DIR/engine | cut -f1))"
+
+          echo "Fixing absolute paths in project.pbxproj..."
+          OLD_ENGINE="$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native"
+          OLD_BUILD="${{ github.workspace }}/build/ios"
+          sed -i '' \
+            -e "s|$OLD_ENGINE/|../engine/|g" \
+            -e "s|$OLD_BUILD/|../|g" \
+            "$PBXPROJ"
+
+          echo "Fixing scheme file..."
+          SCHEME_FILE="$PROJ_DIR/hello-world.xcodeproj/xcshareddata/xcschemes/hello-world-mobile.xcscheme"
+          if [ -f "$SCHEME_FILE" ]; then
+            sed -i '' "s|$OLD_BUILD/proj/||g" "$SCHEME_FILE"
+            echo "✅ Scheme file fixed"
+          fi
+
+          echo "Verifying no absolute paths remain..."
+          grep -r "$HOME" "$PROJ_DIR/hello-world.xcodeproj" && echo "❌ Absolute paths still present!" || echo "✅ All paths fixed"
+
+      # -----------------------------------------------------------------------
+      # Step 9: 检查构建产物
       # -----------------------------------------------------------------------
       - name: Inspect Build Output
         if: always()
