@@ -230,9 +230,19 @@ jobs:
           echo "Build Output: ${{ github.workspace }}/build"
           echo "Debug: ${{ github.event.inputs.debug }}"
 
+          # 自动检测场景 UUID
+          SCENE_META=$(find "$PROJECT_DIR/assets" -name "*.scene.meta" -maxdepth 3 | head -1)
+          if [ -n "$SCENE_META" ]; then
+            SCENE_UUID=$(python3 -c "import json; print(json.load(open('$SCENE_META'))['uuid'])")
+            echo "Detected scene UUID: $SCENE_UUID"
+          else
+            echo "ERROR: No scene found in project assets!"
+            exit 1
+          fi
+
           # 生成完整构建配置
           BUILD_CFG="${{ github.workspace }}/build-config.json"
-          python3 -c "import json; cfg = {'platform': 'ios', 'buildPath': '${{ github.workspace }}/build', 'packages': {'ios': {'packageName': 'com.cocos.example.ios'}}}; json.dump(cfg, open('$BUILD_CFG','w'), indent=2)"
+          python3 -c "import json; cfg = {'platform': 'ios', 'buildPath': '${{ github.workspace }}/build', 'startScene': '$SCENE_UUID', 'scenes': [{'uuid': '$SCENE_UUID'}], 'packages': {'ios': {'packageName': 'com.cocos.example.ios'}}}; json.dump(cfg, open('$BUILD_CFG','w'), indent=2)"
 
           BUILD_ARGS="configPath=$BUILD_CFG"
           if [ "${{ github.event.inputs.debug }}" = "true" ]; then
@@ -243,42 +253,39 @@ jobs:
           echo "Build config:"
           cat "$BUILD_CFG"
 
-          # 执行构建
-          # Cocos Creator 输出日志到 stdout/stderr
-          # 使用超时控制 (1小时)
+          # 执行构建 (不掩盖错误)
+          BUILD_EXIT_CODE=0
           perl -e 'alarm shift; exec @ARGV' 3600 \
             "$COCOS_BIN" \
               --project "$PROJECT_DIR" \
               --build "$BUILD_ARGS" \
-          2>&1 || true
+          2>&1 || BUILD_EXIT_CODE=$?
 
-          # 保存构建退出码
-          BUILD_EXIT_CODE=$?
           echo "exit_code=$BUILD_EXIT_CODE" >> "$GITHUB_OUTPUT"
-
           echo ""
           echo "=== Build Exit Code: $BUILD_EXIT_CODE ==="
+
+          if [ "$BUILD_EXIT_CODE" -ne 0 ]; then
+            echo "❌ Build failed with exit code $BUILD_EXIT_CODE"
+            exit "$BUILD_EXIT_CODE"
+          fi
 
       # -----------------------------------------------------------------------
       # Step 8: 检查构建产物
       # -----------------------------------------------------------------------
       - name: Inspect Build Output
         run: |
+          BUILD_DIR="${{ github.workspace }}/build"
           echo "=== Build Output Structure ==="
-          if [ -d "${{ github.workspace }}/build" ]; then
-            find "${{ github.workspace }}/build" -maxdepth 4 -type f \
-              -name "*.xcodeproj" -o \
-              -name "*.xcworkspace" -o \
-              -name "*.app" -o \
-              -name "cfg.cmake" -o \
-              -name "Info.plist" | sort
+          if [ -d "$BUILD_DIR" ]; then
+            echo "Top-level contents:"
+            ls -la "$BUILD_DIR/"
+            echo ""
+            echo "Directory tree (depth 4):"
+            find "$BUILD_DIR" -maxdepth 4 2>/dev/null | sort
           else
             echo "❌ Build directory not found!"
           fi
-
-          echo ""
-          echo "=== Full Build Directory ==="
-          find "${{ github.workspace }}/build" -maxdepth 3 2>/dev/null || echo "(empty)"
 
       # -----------------------------------------------------------------------
       # Step 9: 上传 iOS Xcode 项目为构建产物
