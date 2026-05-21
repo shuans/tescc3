@@ -79,7 +79,7 @@ jobs:
         id: cache-cocos
         uses: actions/cache@v4
         with:
-          path: /Applications/CocosCreator.app
+          path: ~/CocosCreator.app
           key: cocos-creator-3-8-8-${{ runner.os }}
 
       # -----------------------------------------------------------------------
@@ -91,9 +91,8 @@ jobs:
         run: |
           COCOS_ZIP="/tmp/CocosCreator-3.8.8.zip"
           COCOS_EXTRACT="/tmp/CocosCreatorExtracted"
-          COCOS_APP="/Applications/CocosCreator.app"
+          COCOS_APP="$HOME/CocosCreator.app"
 
-          # 如果已经安装则跳过
           if [ -d "$COCOS_APP" ]; then
             echo "Cocos Creator already installed at $COCOS_APP"
             echo "installed=true" >> "$GITHUB_OUTPUT"
@@ -119,11 +118,8 @@ jobs:
           unzip -q "$COCOS_ZIP" -d "$COCOS_EXTRACT"
           ls -la "$COCOS_EXTRACT/"
 
-          echo "Installing to /Applications..."
-          sudo cp -R "$COCOS_EXTRACT/CocosCreator.app" /Applications/
-
-          echo "Fixing permissions (Cocos Creator needs to write to its own bundle)..."
-          sudo chown -R "$USER:staff" /Applications/CocosCreator.app
+          echo "Installing to $HOME..."
+          cp -R "$COCOS_EXTRACT/CocosCreator.app" "$HOME/"
 
           echo "Verifying installation..."
           if [ -f "$COCOS_APP/Contents/MacOS/CocosCreator" ]; then
@@ -135,7 +131,6 @@ jobs:
             exit 1
           fi
 
-          # 清理临时文件
           rm -rf "$COCOS_ZIP" "$COCOS_EXTRACT"
           echo "installed=true" >> "$GITHUB_OUTPUT"
 
@@ -144,7 +139,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Verify Installation
         run: |
-          COCOS_APP="/Applications/CocosCreator.app"
+          COCOS_APP="$HOME/CocosCreator.app"
           COCOS_BIN="$COCOS_APP/Contents/MacOS/CocosCreator"
 
           echo "=== Cocos Creator Installation Check ==="
@@ -227,7 +222,7 @@ jobs:
       - name: Build for iOS
         id: build-ios
         run: |
-          COCOS_BIN="/Applications/CocosCreator.app/Contents/MacOS/CocosCreator"
+          COCOS_BIN="$HOME/CocosCreator.app/Contents/MacOS/CocosCreator"
           PROJECT_DIR="${{ github.workspace }}/CocosExample"
           DEBUG_MODE="${{ github.event.inputs.debug == 'true' && 'true' || 'false' }}"
 
