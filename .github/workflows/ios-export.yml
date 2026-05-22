@@ -150,9 +150,60 @@ jobs:
             exit 0
           fi
 
-          PICKED_TARGET="cocos_engine"
-          if ! rg -n 'PBXNativeTarget "cocos_engine"' "$PBXPROJ" >/dev/null 2>&1; then
-            echo "ERROR: Required static target 'cocos_engine' not found."
+          PICKED_TARGET=$(awk '
+            BEGIN { in_nt=0; name=""; pt=""; exact=""; fuzzy=""; all="" }
+            /\/\* Begin PBXNativeTarget section \*\// { in_nt=1; next }
+            /\/\* End PBXNativeTarget section \*\//   { in_nt=0 }
+            !in_nt { next }
+            {
+              if ($0 ~ /name = /) {
+                n=$0
+                sub(/^.*name = /, "", n)
+                sub(/;.*/, "", n)
+                gsub(/"/, "", n)
+                name=n
+              }
+              if ($0 ~ /productType = /) {
+                p=$0
+                sub(/^.*productType = /, "", p)
+                sub(/;.*/, "", p)
+                gsub(/"/, "", p)
+                pt=p
+                if (pt == "com.apple.product-type.library.static") {
+                  l=tolower(name)
+                  if (all == "") all=name; else all=all "," name
+                  if (l == "cocos_engine") exact=name
+                  else if (fuzzy == "" && l ~ /cocos.*engine|engine.*cocos/) fuzzy=name
+                }
+              }
+            }
+            END {
+              if (exact != "") print exact
+              else if (fuzzy != "") print fuzzy
+              else print ""
+            }
+          ' "$PBXPROJ")
+          if [ -z "${PICKED_TARGET:-}" ]; then
+            echo "ERROR: No static cocos engine target found."
+            echo "Static target candidates:"
+            awk '
+              BEGIN { in_nt=0; name="" }
+              /\/\* Begin PBXNativeTarget section \*\// { in_nt=1; next }
+              /\/\* End PBXNativeTarget section \*\//   { in_nt=0 }
+              !in_nt { next }
+              {
+                if ($0 ~ /name = /) {
+                  n=$0
+                  sub(/^.*name = /, "", n)
+                  sub(/;.*/, "", n)
+                  gsub(/"/, "", n)
+                  name=n
+                }
+                if ($0 ~ /productType = "com.apple.product-type.library.static"/) {
+                  print "- " name
+                }
+              }
+            ' "$PBXPROJ" | sort -u
             exit 1
           fi
           echo "Using static library target: $PICKED_TARGET"

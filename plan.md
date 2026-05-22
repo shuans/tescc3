@@ -4,3 +4,7 @@
   -library libCocosEngine_simulator.a -headers ./headers \
   -output CocosEngine.xcframework
 请谨慎使用此类代码。📦 资产（Assets）与脚本的处理虽然引擎代码变为了静态库，但游戏的图片、音频和编译后的 JS 字节码无法直接塞进静态库二进制文件中。资源合入主 App：你需要将构建出来的 assets、src、jsb-adapter 等目录，作为 Folder References 直接拖入你的 iOS 主 App 工程中。路径重定向：在初始化静态库中的 Cocos 引擎时，需传入主 App 的 Bundle 路径，确保引擎能正确读取到这些外置资源。⚠️ 避坑与技术限制限制项影响与解决方案C++ 符号冲突Cocos 内置了 v8、uv、openssl 等三方库。如果你的主 App 也用了这些库，会导致链接冲突。需在 CMake 中隐藏符号（Hidden Visibility）。生命周期控制Cocos 引擎默认接管整个 App 进程。封装为 Framework 后，需要改造 AppDelegate，将其渲染挂载到指定的 UIViewController 上，并实现销毁（Destroy）逻辑。热更新限制静态库本身无法热更。但你可以保持资源（Assets）的外置，利用引擎自带的 AssetsManager 实现纯资源和 JS 脚本的热更新。如果你需要更具体的实现细节，可以告诉我：你的主 App 是 Objective-C 还是 Swift 项目？是否需要在一个主 App 里面多次销毁并重新打开 Cocos 游戏？是否需要用到特殊的原生第三方 SDK 交互（如支付、登录等）？
+
+
+
+
