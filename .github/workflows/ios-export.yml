@@ -220,18 +220,21 @@ jobs:
             exit 0
           fi
 
-          DEVICE_A_DIR="$BUILD_ROOT/iphoneos/Release-iphoneos"
-          SIM_A_DIR="$BUILD_ROOT/iphonesimulator/Release-iphonesimulator"
-          DEVICE_A=$(find "$DEVICE_A_DIR" -name "*.a" | head -1 || true)
+          echo "Discovering libcocos_engine.a outputs..."
+          DEVICE_A=$(find "$BUILD_ROOT/iphoneos" "$PROJ_DIR" -name "libcocos_engine.a" 2>/dev/null | grep -E 'iphoneos|Release-iphoneos|archives/Release' | head -1 || true)
           if [ -z "${DEVICE_A:-}" ]; then
-            echo "No device static library generated for target: $PICKED_TARGET"
+            DEVICE_A=$(find "$BUILD_ROOT/iphoneos" "$PROJ_DIR" -name "libcocos_engine.a" 2>/dev/null | head -1 || true)
+          fi
+          if [ -z "${DEVICE_A:-}" ]; then
+            echo "No device libcocos_engine.a generated for target: $PICKED_TARGET"
+            echo "Debug list (cocos static libs):"
+            find "$BUILD_ROOT" "$PROJ_DIR" -name "lib*cocos*.a" 2>/dev/null | head -50 || true
             exit 0
           fi
 
-          LIB_NAME=$(basename "$DEVICE_A")
-          SIM_A=$(find "$SIM_A_DIR" -name "$LIB_NAME" | head -1 || true)
+          SIM_A=$(find "$BUILD_ROOT/iphonesimulator" "$PROJ_DIR" -name "libcocos_engine.a" 2>/dev/null | grep -E 'iphonesimulator|Release-iphonesimulator|simulator' | head -1 || true)
           if [ -z "${SIM_A:-}" ]; then
-            SIM_A=$(find "$SIM_A_DIR" -name "*.a" | head -1 || true)
+            SIM_A=$(find "$BUILD_ROOT/iphonesimulator" "$PROJ_DIR" -name "libcocos_engine.a" 2>/dev/null | head -1 || true)
           fi
 
           if [ -n "${SIM_A:-}" ]; then
@@ -241,8 +244,12 @@ jobs:
               -library "$SIM_A" -headers "$TMP_HEADERS" \
               -output "$XC_OUT"
             echo "Created xcframework from target: $PICKED_TARGET"
+            echo "Device lib: $DEVICE_A"
+            echo "Simulator lib: $SIM_A"
           else
-            echo "No simulator static library found to pair with $LIB_NAME, skip xcframework packaging."
+            echo "No simulator libcocos_engine.a found to pair with device lib, skip xcframework packaging."
+            echo "Debug list (simulator cocos static libs):"
+            find "$BUILD_ROOT/iphonesimulator" "$PROJ_DIR" -name "lib*cocos*.a" 2>/dev/null | head -50 || true
           fi
 
       - name: Package Runtime Assets
