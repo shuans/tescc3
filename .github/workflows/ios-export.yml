@@ -13,6 +13,7 @@ on:
 env:
   COCOS_DOWNLOAD_URL: "https://download.cocos.org/CocosCreator/v3.8.8/CocosCreator-v3.8.8-mac-010512.zip"
   TEMPLATE_REPO: "https://github.com/cocos/cocos-template-hello-world.git"
+  MD_APPLE_SDK_ROOT: "/Applications/Xcode_26.3.app"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,6 +32,17 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "16.3"
+
+      - name: Pin Developer Directory
+        run: |
+          set -euo pipefail
+          if [ -d "${{ env.MD_APPLE_SDK_ROOT }}/Contents/Developer" ]; then
+            echo "DEVELOPER_DIR=${{ env.MD_APPLE_SDK_ROOT }}/Contents/Developer" >> "$GITHUB_ENV"
+            echo "Using pinned Xcode: ${{ env.MD_APPLE_SDK_ROOT }}"
+          else
+            echo "Pinned Xcode not found, fallback to current xcode-select"
+            echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+          fi
 
       - name: Cache Cocos Creator
         id: cache-cocos
@@ -68,7 +80,9 @@ jobs:
           set -euo pipefail
           COCOS_BIN="$HOME/CocosCreator.app/Contents/MacOS/CocosCreator"
           test -x "$COCOS_BIN"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR"
           xcodebuild -version
+          xcodebuild -showsdks
 
       - name: Initialize Hello World Example Project
         run: |
@@ -657,6 +671,20 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          copy_runtime_dir() {
+            local dest_name="$1"
+            shift
+            for candidate in "$@"; do
+              if [ -d "$candidate" ]; then
+                cp -R "$candidate" "$STAGE_BASE/$dest_name"
+                return 0
+              fi
+            done
+            echo "ERROR: runtime dir not found for $dest_name"
+            echo "Checked:"
+            for candidate in "$@"; do echo "- $candidate"; done
+            return 1
+          }
           IOS_DIR="${{ github.workspace }}/build/ios"
           PROJ_DIR="$IOS_DIR/proj"
           XCODEPROJ=$(find "$PROJ_DIR" -maxdepth 2 -name "*.xcodeproj" | head -1 || true)
@@ -664,6 +692,7 @@ jobs:
           COCOS_NATIVE_SRC="$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native"
           PORTABLE_ROOT="$IOS_DIR/portable-cocos"
           PORTABLE_NATIVE="$PORTABLE_ROOT/native"
+          STAGE_BASE="${{ github.workspace }}/build"
 
           if [ -z "${XCODEPROJ:-}" ] || [ ! -f "$PBXPROJ" ]; then
             echo "No xcodeproj found, skip portable project packaging."
@@ -681,18 +710,99 @@ jobs:
           # Rewrite absolute Cocos paths to packaged relative paths.
           sed -i '' "s|/Users/runner/CocosCreator.app/Contents/Resources/resources/3d/engine/native|../portable-cocos/native|g" "$PBXPROJ"
           sed -i '' "s|$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native|../portable-cocos/native|g" "$PBXPROJ"
+          sed -E -i '' "s|/[^[:space:]\"]*CocosCreator\\.app/Contents/Resources/resources/3d/engine/native|../portable-cocos/native|g" "$PBXPROJ"
 
           # Rewrite CI workspace paths to project-relative paths.
           CI_BUILD_PREFIX="${{ github.workspace }}/build/ios/proj"
           sed -i '' "s|$CI_BUILD_PREFIX|.|g" "$PBXPROJ"
-          sed -i '' "s|${{ github.workspace }}/CocosExample/native/engine/ios|../../CocosExample/native/engine/ios|g" "$PBXPROJ"
+          sed -i '' "s|${{ github.workspace }}/CocosExample/native/engine/ios|../portable-cocos/native/engine/ios|g" "$PBXPROJ"
 
-          # Scheme container portability.
-          SCHEME_FILE=$(find "$XCODEPROJ/xcshareddata/xcschemes" -name "*.xcscheme" | head -1 || true)
-          if [ -n "${SCHEME_FILE:-}" ] && [ -f "$SCHEME_FILE" ]; then
-            sed -i '' "s|container:/Users/runner/work/[^/]*/[^/]*/build/ios/proj/|container:|g" "$SCHEME_FILE"
-            sed -i '' "s|container:${{ github.workspace }}/build/ios/proj/|container:|g" "$SCHEME_FILE"
+          # Scheme container portability (all shared schemes).
+          SCHEME_DIR="$XCODEPROJ/xcshareddata/xcschemes"
+          if [ -d "$SCHEME_DIR" ]; then
+            find "$SCHEME_DIR" -name "*.xcscheme" -print0 | while IFS= read -r -d '' scheme; do
+              sed -i '' "s|container:/Users/runner/work/[^/]*/[^/]*/build/ios/proj/|container:|g" "$scheme"
+              sed -i '' "s|container:${{ github.workspace }}/build/ios/proj/|container:|g" "$scheme"
+            done
           fi
+
+          # Guard: no absolute CI/machine paths should remain.
+          if grep -En '/Users/|/Applications/|'"${{ github.workspace }}" "$PBXPROJ"; then
+            echo "ERROR: absolute paths remain in project.pbxproj"
+            exit 1
+          fi
+          if [ -d "$SCHEME_DIR" ]; then
+            while IFS= read -r scheme; do
+              if grep -En '/Users/|/Applications/|'"${{ github.workspace }}" "$scheme"; then
+                echo "ERROR: absolute paths remain in xcscheme: $scheme"
+                exit 1
+              fi
+            done < <(find "$SCHEME_DIR" -name "*.xcscheme")
+          fi
+
+          # Normalize runtime dirs to canonical build root for downstream steps.
+          rm -rf "$STAGE_BASE/assets" "$STAGE_BASE/src" "$STAGE_BASE/jsb-adapter"
+          copy_runtime_dir "assets" \
+            "$STAGE_BASE/assets" \
+            "$IOS_DIR/assets" \
+            "$IOS_DIR/data/assets"
+          copy_runtime_dir "src" \
+            "$STAGE_BASE/src" \
+            "$IOS_DIR/src" \
+            "$IOS_DIR/data/src"
+          copy_runtime_dir "jsb-adapter" \
+            "$STAGE_BASE/jsb-adapter" \
+            "$IOS_DIR/jsb-adapter" \
+            "$IOS_DIR/data/jsb-adapter"
+
+      - name: Validate Portable Bundle Build (Simulated Download Layout)
+        if: always()
+        run: |
+          set -euo pipefail
+          STAGE_DIR="$RUNNER_TEMP/portable-bundle-check"
+          rm -rf "$STAGE_DIR"
+          mkdir -p "$STAGE_DIR"
+
+          cp -R "${{ github.workspace }}/build/ios/proj" "$STAGE_DIR/proj"
+          cp -R "${{ github.workspace }}/build/ios/portable-cocos" "$STAGE_DIR/portable-cocos"
+          cp -R "${{ github.workspace }}/build/assets" "$STAGE_DIR/assets"
+          cp -R "${{ github.workspace }}/build/src" "$STAGE_DIR/src"
+          cp -R "${{ github.workspace }}/build/jsb-adapter" "$STAGE_DIR/jsb-adapter"
+
+          XCODEPROJ=$(find "$STAGE_DIR/proj" -maxdepth 2 -name "*.xcodeproj" | head -1 || true)
+          if [ -z "${XCODEPROJ:-}" ]; then
+            echo "ERROR: no xcodeproj in staged portable bundle"
+            exit 1
+          fi
+          SCHEME_PATH=$(find "$XCODEPROJ/xcshareddata/xcschemes" -name "*.xcscheme" | head -1 || true)
+          SCHEME_NAME=$(basename "${SCHEME_PATH:-}" .xcscheme)
+          if [ -z "${SCHEME_NAME:-}" ]; then
+            echo "ERROR: no shared scheme in staged portable bundle"
+            exit 1
+          fi
+
+          xcodebuild \
+            -project "$XCODEPROJ" \
+            -scheme "$SCHEME_NAME" \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Assemble Portable Artifact Bundle
+        if: success()
+        run: |
+          set -euo pipefail
+          BUNDLE_ROOT="${{ github.workspace }}/build/portable-bundle"
+          rm -rf "$BUNDLE_ROOT"
+          mkdir -p "$BUNDLE_ROOT"
+          cp -R "${{ github.workspace }}/build/ios/proj" "$BUNDLE_ROOT/proj"
+          cp -R "${{ github.workspace }}/build/ios/portable-cocos" "$BUNDLE_ROOT/portable-cocos"
+          cp -R "${{ github.workspace }}/build/assets" "$BUNDLE_ROOT/assets"
+          cp -R "${{ github.workspace }}/build/src" "$BUNDLE_ROOT/src"
+          cp -R "${{ github.workspace }}/build/jsb-adapter" "$BUNDLE_ROOT/jsb-adapter"
 
       - name: Inspect Build Output
         if: always()
@@ -721,11 +831,7 @@ jobs:
         with:
           name: cocos-ios-portable-project
           path: |
-            build/ios/proj/
-            build/ios/portable-cocos/
-            build/assets/
-            build/src/
-            build/jsb-adapter/
+            build/portable-bundle/
           if-no-files-found: error
           compression-level: 6
           retention-days: 30
