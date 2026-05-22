@@ -141,67 +141,47 @@ jobs:
             exit 0
           fi
 
-          xcodebuild -list -project "$XCODEPROJ" > "$LOG_DIR/project-list.txt" 2>&1 || true
-          xcodebuild -list -json -project "$XCODEPROJ" > "$LOG_DIR/project-list.json" 2>&1 || true
-
-          TARGETS=""
-          if python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p)); [print(t) for t in d.get('project',{}).get('targets',[]) if t]" "$LOG_DIR/project-list.json" > "$LOG_DIR/targets.txt" 2>/dev/null
-          then
-            TARGETS=$(cat "$LOG_DIR/targets.txt" || true)
-          fi
-
-          if [ -z "${TARGETS:-}" ]; then
-            TARGETS=$(awk '
-              /^Targets:/{flag=1;next}
-              /^Build Configurations:/{flag=0}
-              flag && NF{print}
-            ' "$LOG_DIR/project-list.txt" | sed 's/^[[:space:]]*//' || true)
-          fi
-
-          if [ -z "${TARGETS:-}" ]; then
-            echo "No targets parsed from xcodebuild -list output, skip xcframework packaging."
+          PBXPROJ=$(find "$XCODEPROJ" -name "project.pbxproj" | head -1)
+          if [ -z "$PBXPROJ" ]; then
+            echo "project.pbxproj not found, skip xcframework packaging."
             exit 0
           fi
 
-          PICKED_TARGET=""
-          while IFS= read -r t; do
-            [ -z "$t" ] && continue
-            lower=$(echo "$t" | tr '[:upper:]' '[:lower:]')
-            if echo "$lower" | grep -Eq 'test|tests'; then
-              continue
-            fi
+          PICKED_TARGET=$(python3 -c "import re,sys; t=open(sys.argv[1],encoding='utf-8',errors='ignore').read(); s=re.search(r'/\\* Begin PBXNativeTarget section \\*/(.*?)/\\* End PBXNativeTarget section \\*/',t,re.S); sec=s.group(1) if s else ''; m=re.search(r'name\\s*=\\s*([^;]+);(?:(?!name\\s*=).)*?productType\\s*=\\s*\"com.apple.product-type.library.static\";',sec,re.S); print((m.group(1).strip().strip('\"')) if m else '')" "$PBXPROJ" | head -1 || true)
 
-            echo "Trying target: $t"
-            if xcodebuild \
-              -project "$XCODEPROJ" \
-              -target "$t" \
-              -configuration Release \
-              -sdk iphoneos \
-              BUILD_DIR="$BUILD_ROOT/iphoneos" \
-              BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
-              IPHONEOS_DEPLOYMENT_TARGET=14.5 \
-              ONLY_ACTIVE_ARCH=NO \
-              CODE_SIGNING_ALLOWED=NO \
-              build > "$LOG_DIR/build-${t// /_}-iphoneos.log" 2>&1; then
-              if xcodebuild \
-                -project "$XCODEPROJ" \
-                -target "$t" \
-                -configuration Release \
-                -sdk iphonesimulator \
-                BUILD_DIR="$BUILD_ROOT/iphonesimulator" \
-                BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
-                IPHONEOS_DEPLOYMENT_TARGET=14.5 \
-                ONLY_ACTIVE_ARCH=NO \
-                CODE_SIGNING_ALLOWED=NO \
-                build > "$LOG_DIR/build-${t// /_}-iphonesimulator.log" 2>&1; then
-                PICKED_TARGET="$t"
-                break
-              fi
-            fi
-          done <<< "$TARGETS"
+          if [ -z "${PICKED_TARGET:-}" ]; then
+            echo "No static library target found in pbxproj, skip xcframework packaging."
+            exit 0
+          fi
 
-          if [ -z "$PICKED_TARGET" ]; then
-            echo "No buildable static-library style target found, skip xcframework packaging."
+          echo "Using static library target: $PICKED_TARGET"
+          if ! xcodebuild \
+            -project "$XCODEPROJ" \
+            -target "$PICKED_TARGET" \
+            -configuration Release \
+            -sdk iphoneos \
+            BUILD_DIR="$BUILD_ROOT/iphoneos" \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            IPHONEOS_DEPLOYMENT_TARGET=14.5 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build > "$LOG_DIR/build-${PICKED_TARGET// /_}-iphoneos.log" 2>&1; then
+            echo "Device static-library build failed for target: $PICKED_TARGET"
+            exit 0
+          fi
+
+          if ! xcodebuild \
+            -project "$XCODEPROJ" \
+            -target "$PICKED_TARGET" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            BUILD_DIR="$BUILD_ROOT/iphonesimulator" \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            IPHONEOS_DEPLOYMENT_TARGET=14.5 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build > "$LOG_DIR/build-${PICKED_TARGET// /_}-iphonesimulator.log" 2>&1; then
+            echo "Simulator static-library build failed for target: $PICKED_TARGET"
             exit 0
           fi
 
