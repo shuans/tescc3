@@ -414,9 +414,9 @@ jobs:
               postBuildScripts:
                 - name: Validate Runtime Resources
                   script: |
-                    test -d "${SRCROOT}/../assets"
-                    test -d "${SRCROOT}/../src"
-                    test -d "${SRCROOT}/../jsb-adapter"
+                    test -d "${SRCROOT}/../../assets"
+                    test -d "${SRCROOT}/../../src"
+                    test -d "${SRCROOT}/../../jsb-adapter"
           YAML
 
           cat > "$APP_DIR/Resources/Info.plist" <<'PLIST'
@@ -718,6 +718,8 @@ jobs:
           sed -i '' "s|${{ github.workspace }}/CocosExample/native/engine/ios|../portable-cocos/native/engine/ios|g" "$PBXPROJ"
           sed -E -i '' "s|/Users/[^[:space:]\"]*/work/[^[:space:]\"]*/build/ios/proj|.|g" "$PBXPROJ"
           sed -E -i '' "s|/Users/[^[:space:]\"]*/work/[^[:space:]\"]*/CocosExample/native/engine/ios|../portable-cocos/native/engine/ios|g" "$PBXPROJ"
+          sed -E -i '' "s|/Users/[^[:space:]\"]*/work/[^[:space:]\"]*/build/ios/proj/|./|g" "$PBXPROJ"
+          sed -E -i '' "s|/Users/[^[:space:]\"]*/work/[^[:space:]\"]*/build/ios/portable-cocos/native|../portable-cocos/native|g" "$PBXPROJ"
 
           # Scheme container portability (all shared schemes).
           SCHEME_DIR="$XCODEPROJ/xcshareddata/xcschemes"
