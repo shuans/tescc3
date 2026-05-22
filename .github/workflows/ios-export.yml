@@ -145,17 +145,7 @@ jobs:
           xcodebuild -list -json -project "$XCODEPROJ" > "$LOG_DIR/project-list.json" 2>&1 || true
 
           TARGETS=""
-          if python3 - "$LOG_DIR/project-list.json" > "$LOG_DIR/targets.txt" 2>/dev/null <<'PY'
-import json, sys
-p = sys.argv[1]
-try:
-    data = json.load(open(p))
-    for t in data.get("project", {}).get("targets", []):
-        if t:
-            print(t)
-except Exception:
-    pass
-PY
+          if python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p)); [print(t) for t in d.get('project',{}).get('targets',[]) if t]" "$LOG_DIR/project-list.json" > "$LOG_DIR/targets.txt" 2>/dev/null
           then
             TARGETS=$(cat "$LOG_DIR/targets.txt" || true)
           fi
