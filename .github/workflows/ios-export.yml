@@ -30,7 +30,7 @@ jobs:
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: "16.3"
 
       - name: Cache Cocos Creator
         id: cache-cocos
@@ -110,7 +110,7 @@ jobs:
           "$COCOS_BIN" --project "$PROJECT_DIR" --build "$BUILD_ARGS" 2>&1 || BUILD_EXIT_CODE=$?
 
           echo "exit_code=$BUILD_EXIT_CODE" >> "$GITHUB_OUTPUT"
-          if [ "$BUILD_EXIT_CODE" -eq 32 ] || [ "$BUILD_EXIT_CODE" -eq 34 ]; then
+          if [ "$BUILD_EXIT_CODE" -ne 0 ] && [ "$BUILD_EXIT_CODE" -ne 36 ]; then
             exit "$BUILD_EXIT_CODE"
           fi
 
@@ -152,35 +152,8 @@ jobs:
 
           PICKED_TARGET="cocos_engine"
           if ! rg -n 'PBXNativeTarget "cocos_engine"' "$PBXPROJ" >/dev/null 2>&1; then
-            PICKED_TARGET=$(awk '
-              BEGIN { in_nt=0; name=""; cand=""; fallback="" }
-              /\/\* Begin PBXNativeTarget section \*\// { in_nt=1; next }
-              /\/\* End PBXNativeTarget section \*\//   { in_nt=0 }
-              !in_nt { next }
-              {
-                if ($0 ~ /name = /) {
-                  n=$0
-                  sub(/^.*name = /, "", n)
-                  sub(/;.*/, "", n)
-                  gsub(/"/, "", n)
-                  name=n
-                }
-                if ($0 ~ /productType = "com.apple.product-type.library.static"/) {
-                  l=tolower(name)
-                  if (fallback == "" && name != "") fallback=name
-                  if (cand == "" && l ~ /(^|_)cocos(_|$)|cocos.?engine/) cand=name
-                }
-              }
-              END {
-                if (cand != "") print cand
-                else if (fallback != "") print fallback
-              }
-            ' "$PBXPROJ" | head -1 || true)
-          fi
-
-          if [ -z "${PICKED_TARGET:-}" ]; then
-            echo "No static library target found in pbxproj, skip xcframework packaging."
-            exit 0
+            echo "ERROR: Required static target 'cocos_engine' not found."
+            exit 1
           fi
           echo "Using static library target: $PICKED_TARGET"
           echo "Building iphoneos static lib..."
@@ -192,6 +165,8 @@ jobs:
             CONFIGURATION_BUILD_DIR="$DEVICE_OUT" \
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             IPHONEOS_DEPLOYMENT_TARGET=14.5 \
+            CLANG_CXX_LANGUAGE_STANDARD=c++17 \
+            CLANG_CXX_LIBRARY=libc++ \
             GCC_SYMBOLS_PRIVATE_EXTERN=YES \
             OTHER_CFLAGS="-fvisibility=hidden -fvisibility-inlines-hidden" \
             OTHER_CPLUSPLUSFLAGS="-fvisibility=hidden -fvisibility-inlines-hidden" \
@@ -200,7 +175,7 @@ jobs:
             build 2>&1 | tee "$LOG_DIR/build-${PICKED_TARGET// /_}-iphoneos.log"; then
             echo "Device static-library build failed for target: $PICKED_TARGET"
             tail -n 120 "$LOG_DIR/build-${PICKED_TARGET// /_}-iphoneos.log" || true
-            exit 0
+            exit 1
           fi
 
           echo "Building iphonesimulator static lib..."
@@ -213,6 +188,8 @@ jobs:
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             IPHONEOS_DEPLOYMENT_TARGET=14.5 \
             ARCHS="arm64 x86_64" \
+            CLANG_CXX_LANGUAGE_STANDARD=c++17 \
+            CLANG_CXX_LIBRARY=libc++ \
             GCC_SYMBOLS_PRIVATE_EXTERN=YES \
             OTHER_CFLAGS="-fvisibility=hidden -fvisibility-inlines-hidden" \
             OTHER_CPLUSPLUSFLAGS="-fvisibility=hidden -fvisibility-inlines-hidden" \
@@ -221,7 +198,7 @@ jobs:
             build 2>&1 | tee "$LOG_DIR/build-${PICKED_TARGET// /_}-iphonesimulator.log"; then
             echo "Simulator static-library build failed for target: $PICKED_TARGET"
             tail -n 120 "$LOG_DIR/build-${PICKED_TARGET// /_}-iphonesimulator.log" || true
-            exit 0
+            exit 1
           fi
 
           DEVICE_A="$DEVICE_OUT/libcocos_engine.a"
@@ -238,7 +215,7 @@ jobs:
             echo "No device libcocos_engine.a generated for target: $PICKED_TARGET at $DEVICE_OUT"
             echo "Debug list (cocos static libs):"
             find "$BUILD_ROOT" -name "lib*cocos*.a" 2>/dev/null | head -50 || true
-            exit 0
+            exit 1
           fi
 
           if [ ! -f "$SIM_A" ]; then
@@ -259,9 +236,10 @@ jobs:
             echo "Device lib: $DEVICE_A"
             echo "Simulator lib: $SIM_A"
           else
-            echo "No simulator libcocos_engine.a found to pair with device lib, skip xcframework packaging."
+            echo "No simulator libcocos_engine.a found to pair with device lib."
             echo "Debug list (simulator cocos static libs):"
             find "$SIM_OUT" -name "lib*cocos*.a" 2>/dev/null | head -50 || true
+            exit 1
           fi
 
       - name: Package Runtime Assets
@@ -290,8 +268,13 @@ jobs:
             echo "ERROR: XCFramework Info.plist missing."
             exit 1
           fi
-          if ! find "$OUT_DIR/CocosEngine.xcframework" -type f -name "libcocos_engine.a" | grep -Eq "/ios-arm64/|/ios-arm64_[^/]*simulator/|/ios-arm64_x86_64-simulator/"; then
-            echo "ERROR: XCFramework missing arm64/device or arm64 simulator slice."
+          if ! find "$OUT_DIR/CocosEngine.xcframework" -type f -name "libcocos_engine.a" | grep -Eq "/ios-arm64/"; then
+            echo "ERROR: XCFramework missing ios-arm64 device slice."
+            find "$OUT_DIR/CocosEngine.xcframework" -maxdepth 3 -type f | sort
+            exit 1
+          fi
+          if ! find "$OUT_DIR/CocosEngine.xcframework" -type f -name "libcocos_engine.a" | grep -Eq "/ios-arm64_[^/]*simulator/|/ios-arm64_x86_64-simulator/|/ios-x86_64-simulator/"; then
+            echo "ERROR: XCFramework missing simulator slice."
             find "$OUT_DIR/CocosEngine.xcframework" -maxdepth 3 -type f | sort
             exit 1
           fi
@@ -348,6 +331,9 @@ jobs:
             CI_ROOT_PREFIX="${{ github.workspace }}/"
             sed -i '' "s|$CI_BUILD_PREFIX|../|g" "$PBXPROJ"
             sed -i '' "s|$CI_ROOT_PREFIX|../../|g" "$PBXPROJ"
+            # Keep generated project aligned with C++17 requirement of Cocos 3.8.8 bindings.
+            sed -i '' "s|CLANG_CXX_LANGUAGE_STANDARD = .*;|CLANG_CXX_LANGUAGE_STANDARD = c++17;|g" "$PBXPROJ"
+            sed -i '' "s|CLANG_CXX_LIBRARY = .*;|CLANG_CXX_LIBRARY = libc++;|g" "$PBXPROJ"
           fi
 
           SCHEME_FILE=$(find "$XCODEPROJ/xcshareddata/xcschemes" -name "*.xcscheme" | head -1 || true)
