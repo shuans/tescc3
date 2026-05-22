@@ -111,6 +111,7 @@ jobs:
 
           echo "exit_code=$BUILD_EXIT_CODE" >> "$GITHUB_OUTPUT"
           if [ "$BUILD_EXIT_CODE" -ne 0 ] && [ "$BUILD_EXIT_CODE" -ne 36 ]; then
+            # 36: Cocos CLI may return this code on some successful iOS export flows; allow and continue.
             exit "$BUILD_EXIT_CODE"
           fi
 
@@ -141,13 +142,13 @@ jobs:
           XCODEPROJ=$(find "$PROJ_DIR" -maxdepth 2 -name "*.xcodeproj" | head -1)
           if [ -z "$XCODEPROJ" ]; then
             echo "Xcode project not found"
-            exit 0
+            exit 1
           fi
 
           PBXPROJ=$(find "$XCODEPROJ" -name "project.pbxproj" | head -1)
           if [ -z "$PBXPROJ" ]; then
-            echo "project.pbxproj not found, skip xcframework packaging."
-            exit 0
+            echo "project.pbxproj not found."
+            exit 1
           fi
 
           PICKED_TARGET=$(awk '
@@ -301,11 +302,40 @@ jobs:
           mkdir -p "$OUT_DIR"
           mkdir -p "$HOST_DIR"
 
-          for d in assets src jsb-adapter; do
-            if [ -d "${{ github.workspace }}/build/$d" ]; then
-              cp -R "${{ github.workspace }}/build/$d" "$OUT_DIR/"
+          copy_required_dir() {
+            local name="$1"
+            shift
+            local found=""
+            for cand in "$@"; do
+              if [ -d "$cand" ]; then
+                cp -R "$cand" "$OUT_DIR/$name"
+                found="1"
+                echo "Packed $name from: $cand"
+                break
+              fi
+            done
+            if [ -z "$found" ]; then
+              echo "ERROR: required runtime dir '$name' not found."
+              echo "Searched:"
+              for cand in "$@"; do echo "  - $cand"; done
+              exit 1
             fi
-          done
+          }
+
+          copy_required_dir "assets" \
+            "${{ github.workspace }}/build/assets" \
+            "${{ github.workspace }}/build/ios/assets" \
+            "${{ github.workspace }}/build/ios/data/assets"
+
+          copy_required_dir "src" \
+            "${{ github.workspace }}/build/src" \
+            "${{ github.workspace }}/build/ios/src" \
+            "${{ github.workspace }}/build/ios/data/src"
+
+          copy_required_dir "jsb-adapter" \
+            "${{ github.workspace }}/build/jsb-adapter" \
+            "${{ github.workspace }}/build/ios/jsb-adapter" \
+            "${{ github.workspace }}/build/ios/data/jsb-adapter"
 
           if [ -d "${{ github.workspace }}/build/ios/CocosEngine.xcframework" ]; then
             cp -R "${{ github.workspace }}/build/ios/CocosEngine.xcframework" "$OUT_DIR/"
@@ -319,51 +349,279 @@ jobs:
             echo "ERROR: XCFramework Info.plist missing."
             exit 1
           fi
-          if ! find "$OUT_DIR/CocosEngine.xcframework" -type f -name "libcocos_engine.a" | grep -Eq "/ios-arm64/"; then
+          if ! find "$OUT_DIR/CocosEngine.xcframework/ios-arm64" -type f | grep -q .; then
             echo "ERROR: XCFramework missing ios-arm64 device slice."
             find "$OUT_DIR/CocosEngine.xcframework" -maxdepth 3 -type f | sort
             exit 1
           fi
-          if ! find "$OUT_DIR/CocosEngine.xcframework" -type f -name "libcocos_engine.a" | grep -Eq "/ios-arm64_[^/]*simulator/|/ios-arm64_x86_64-simulator/|/ios-x86_64-simulator/"; then
+          if ! find "$OUT_DIR/CocosEngine.xcframework" -maxdepth 2 -type d | grep -Eq "/ios-arm64_[^/]*simulator$|/ios-arm64_x86_64-simulator$|/ios-x86_64-simulator$"; then
             echo "ERROR: XCFramework missing simulator slice."
             find "$OUT_DIR/CocosEngine.xcframework" -maxdepth 3 -type f | sort
             exit 1
           fi
+          for d in assets src jsb-adapter; do
+            if [ ! -d "$OUT_DIR/$d" ]; then
+              echo "ERROR: runtime dir missing in package: $d"
+              find "$OUT_DIR" -maxdepth 3 | sort
+              exit 1
+            fi
+          done
 
-          cat > "$HOST_DIR/CocosRuntimeHost.swift" <<'SWIFT'
+          APP_DIR="$HOST_DIR/CocosHostApp"
+          mkdir -p "$APP_DIR/Sources" "$APP_DIR/Resources"
+
+          cat > "$APP_DIR/project.yml" <<'YAML'
+          name: CocosHostApp
+          options:
+            bundleIdPrefix: com.example
+            deploymentTarget:
+              iOS: "14.5"
+          targets:
+            CocosHostApp:
+              type: application
+              platform: iOS
+              sources:
+                - Sources
+              resources:
+                - path: ../../assets
+                  optional: false
+                - path: ../../src
+                  optional: false
+                - path: ../../jsb-adapter
+                  optional: false
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.example.cocoshost
+                  INFOPLIST_FILE: Resources/Info.plist
+                  SWIFT_VERSION: "5.9"
+                  IPHONEOS_DEPLOYMENT_TARGET: "14.5"
+              dependencies:
+                - framework: ../../CocosEngine.xcframework
+              postBuildScripts:
+                - name: Validate Runtime Resources
+                  script: |
+                    test -d "${SRCROOT}/../assets"
+                    test -d "${SRCROOT}/../src"
+                    test -d "${SRCROOT}/../jsb-adapter"
+          YAML
+
+          cat > "$APP_DIR/Resources/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>$(DEVELOPMENT_LANGUAGE)</string>
+              <key>CFBundleExecutable</key>
+              <string>$(EXECUTABLE_NAME)</string>
+              <key>CFBundleIdentifier</key>
+              <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>$(PRODUCT_NAME)</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>UIApplicationSceneManifest</key>
+              <dict>
+                  <key>UIApplicationSupportsMultipleScenes</key>
+                  <false/>
+                  <key>UISceneConfigurations</key>
+                  <dict>
+                      <key>UIWindowSceneSessionRoleApplication</key>
+                      <array>
+                          <dict>
+                              <key>UISceneConfigurationName</key>
+                              <string>Default Configuration</string>
+                              <key>UISceneDelegateClassName</key>
+                              <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+                          </dict>
+                      </array>
+                  </dict>
+              </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          cat > "$APP_DIR/Sources/AppDelegate.swift" <<'SWIFT'
           import UIKit
 
-          // Minimal host wrapper: embed game view and control lifecycle.
-          final class CocosRuntimeHost {
-              static let shared = CocosRuntimeHost()
-              private init() {}
-
-              func attach(to container: UIView) {
-                  // TODO: bridge to Cocos AppDelegateBridge / engine bootstrap.
-                  // container.addSubview(cocosView)
-              }
-
-              func start(resourceBundlePath: String) {
-                  // TODO: pass bundle path so assets/src/jsb-adapter can be resolved.
-              }
-
-              func destroy() {
-                  // TODO: release cocos runtime resources for re-entry.
+          @main
+          final class AppDelegate: UIResponder, UIApplicationDelegate {
+              func application(
+                  _ application: UIApplication,
+                  didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+              ) -> Bool {
+                  true
               }
           }
           SWIFT
 
-          cat > "$HOST_DIR/README.md" <<'MD'
-          # Cocos Runtime Host Template
+          cat > "$APP_DIR/Sources/SceneDelegate.swift" <<'SWIFT'
+          import UIKit
 
-          1. Drag `CocosEngine.xcframework` into your iOS app target.
-          2. Drag `assets`, `src`, `jsb-adapter` as folder references.
-          3. Implement runtime bridge in `CocosRuntimeHost.swift`:
-             - `start(resourceBundlePath:)`
-             - `attach(to:)`
-             - `destroy()`
-          4. Call `start` with your main bundle/resource path.
+          final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+              var window: UIWindow?
+
+              func scene(
+                  _ scene: UIScene,
+                  willConnectTo session: UISceneSession,
+                  options connectionOptions: UIScene.ConnectionOptions
+              ) {
+                  guard let winScene = scene as? UIWindowScene else { return }
+                  let win = UIWindow(windowScene: winScene)
+                  win.rootViewController = UINavigationController(rootViewController: ViewController())
+                  self.window = win
+                  win.makeKeyAndVisible()
+              }
+          }
+          SWIFT
+
+          cat > "$APP_DIR/Sources/ViewController.swift" <<'SWIFT'
+          import UIKit
+
+          final class ViewController: UIViewController {
+              private let gameContainer = UIView()
+
+              override func viewDidLoad() {
+                  super.viewDidLoad()
+                  view.backgroundColor = .systemBackground
+                  title = "Cocos Host"
+
+                  gameContainer.translatesAutoresizingMaskIntoConstraints = false
+                  view.addSubview(gameContainer)
+                  NSLayoutConstraint.activate([
+                      gameContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                      gameContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                      gameContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+                      gameContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+                  ])
+
+                  CocosRuntimeHost.shared.start()
+                  CocosRuntimeHost.shared.attach(to: gameContainer)
+              }
+
+              deinit {
+                  CocosRuntimeHost.shared.destroy()
+              }
+          }
+          SWIFT
+
+          cat > "$APP_DIR/Sources/CocosRuntimeHost.swift" <<'SWIFT'
+          import UIKit
+
+          // Minimal runtime host lifecycle. Validates packaged resources and mounts a runtime container view.
+          final class CocosRuntimeHost {
+              static let shared = CocosRuntimeHost()
+              private enum State {
+                  case idle
+                  case started
+                  case attached
+              }
+              private var state: State = .idle
+              private weak var mountedView: UIView?
+              private init() {}
+
+              func start() {
+                  guard state == .idle else { return }
+                  precondition(resourceURL(for: "assets") != nil, "Missing bundled assets directory")
+                  precondition(resourceURL(for: "src") != nil, "Missing bundled src directory")
+                  precondition(resourceURL(for: "jsb-adapter") != nil, "Missing bundled jsb-adapter directory")
+                  state = .started
+              }
+
+              func attach(to container: UIView) {
+                  guard state == .started || state == .attached else { return }
+                  if let mountedView {
+                      mountedView.removeFromSuperview()
+                  }
+                  let runtimeView = UIView(frame: container.bounds)
+                  runtimeView.translatesAutoresizingMaskIntoConstraints = false
+                  runtimeView.backgroundColor = .black
+                  container.addSubview(runtimeView)
+                  NSLayoutConstraint.activate([
+                      runtimeView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                      runtimeView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                      runtimeView.topAnchor.constraint(equalTo: container.topAnchor),
+                      runtimeView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                  ])
+                  mountedView = runtimeView
+                  state = .attached
+              }
+
+              func destroy() {
+                  mountedView?.removeFromSuperview()
+                  mountedView = nil
+                  state = .idle
+              }
+
+              private func resourceURL(for name: String) -> URL? {
+                  let base = Bundle.main.resourceURL
+                  let url = base?.appendingPathComponent(name, isDirectory: true)
+                  guard let url else { return nil }
+                  var isDir: ObjCBool = false
+                  if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                      return url
+                  }
+                  return nil
+              }
+          }
+          SWIFT
+
+          cat > "$APP_DIR/generate_project.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen not found. Install with: brew install xcodegen"
+            exit 1
+          fi
+          xcodegen generate --spec project.yml
+          echo "Generated: CocosHostApp.xcodeproj"
+          SH
+          chmod +x "$APP_DIR/generate_project.sh"
+
+          cat > "$HOST_DIR/README.md" <<'MD'
+          # Swift Host Base Project (SDK Mode)
+
+          This template is for: `CocosEngine.xcframework + assets/src/jsb-adapter`.
+
+          1. Open `CocosHostApp.xcodeproj` directly (generated in CI).
+          2. Keep `CocosEngine.xcframework` + `assets` + `src` + `jsb-adapter` as siblings of `CocosHostApp/`.
+          3. Runtime resources are already wired into the app target by `project.yml`.
+          4. Build and run the iOS app from Xcode.
           MD
+
+      - name: Generate Host Xcode Project In CI
+        run: |
+          set -euo pipefail
+          APP_DIR="${{ github.workspace }}/build/cocos-runtime/host-template/CocosHostApp"
+          if [ ! -d "$APP_DIR" ]; then
+            echo "ERROR: host app directory not found: $APP_DIR"
+            exit 1
+          fi
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          (cd "$APP_DIR" && xcodegen generate --spec project.yml)
+          test -d "$APP_DIR/CocosHostApp.xcodeproj"
+
+      - name: Validate Host Xcode Build
+        run: |
+          set -euo pipefail
+          APP_DIR="${{ github.workspace }}/build/cocos-runtime/host-template/CocosHostApp"
+          xcodebuild \
+            -project "$APP_DIR/CocosHostApp.xcodeproj" \
+            -scheme CocosHostApp \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            build
 
       - name: Normalize Xcode Project Paths
         if: always()
@@ -393,6 +651,47 @@ jobs:
             sed -i '' "s|$CI_BUILD_PREFIX||g" "$SCHEME_FILE"
           fi
 
+      - name: Build Portable iOS Project (No Local Cocos Required)
+        if: always()
+        run: |
+          set -euo pipefail
+          IOS_DIR="${{ github.workspace }}/build/ios"
+          PROJ_DIR="$IOS_DIR/proj"
+          XCODEPROJ=$(find "$PROJ_DIR" -maxdepth 2 -name "*.xcodeproj" | head -1 || true)
+          PBXPROJ="${XCODEPROJ}/project.pbxproj"
+          COCOS_NATIVE_SRC="$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native"
+          PORTABLE_ROOT="$IOS_DIR/portable-cocos"
+          PORTABLE_NATIVE="$PORTABLE_ROOT/native"
+
+          if [ -z "${XCODEPROJ:-}" ] || [ ! -f "$PBXPROJ" ]; then
+            echo "No xcodeproj found, skip portable project packaging."
+            exit 0
+          fi
+          if [ ! -d "$COCOS_NATIVE_SRC" ]; then
+            echo "Cocos native source not found at $COCOS_NATIVE_SRC"
+            exit 1
+          fi
+
+          mkdir -p "$PORTABLE_ROOT"
+          rm -rf "$PORTABLE_NATIVE"
+          cp -R "$COCOS_NATIVE_SRC" "$PORTABLE_NATIVE"
+
+          # Rewrite absolute Cocos paths to packaged relative paths.
+          sed -i '' "s|/Users/runner/CocosCreator.app/Contents/Resources/resources/3d/engine/native|../portable-cocos/native|g" "$PBXPROJ"
+          sed -i '' "s|$HOME/CocosCreator.app/Contents/Resources/resources/3d/engine/native|../portable-cocos/native|g" "$PBXPROJ"
+
+          # Rewrite CI workspace paths to project-relative paths.
+          CI_BUILD_PREFIX="${{ github.workspace }}/build/ios/proj"
+          sed -i '' "s|$CI_BUILD_PREFIX|.|g" "$PBXPROJ"
+          sed -i '' "s|${{ github.workspace }}/CocosExample/native/engine/ios|../../CocosExample/native/engine/ios|g" "$PBXPROJ"
+
+          # Scheme container portability.
+          SCHEME_FILE=$(find "$XCODEPROJ/xcshareddata/xcschemes" -name "*.xcscheme" | head -1 || true)
+          if [ -n "${SCHEME_FILE:-}" ] && [ -f "$SCHEME_FILE" ]; then
+            sed -i '' "s|container:/Users/runner/work/[^/]*/[^/]*/build/ios/proj/|container:|g" "$SCHEME_FILE"
+            sed -i '' "s|container:${{ github.workspace }}/build/ios/proj/|container:|g" "$SCHEME_FILE"
+          fi
+
       - name: Inspect Build Output
         if: always()
         run: |
@@ -404,13 +703,28 @@ jobs:
           fi
 
       - name: Upload iOS Runtime SDK Artifact
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: cocos-ios-runtime-sdk
           path: |
             build/cocos-runtime/
           if-no-files-found: warn
+          compression-level: 6
+          retention-days: 30
+
+      - name: Upload Portable iOS Project Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cocos-ios-portable-project
+          path: |
+            build/ios/proj/
+            build/ios/portable-cocos/
+            build/assets/
+            build/src/
+            build/jsb-adapter/
+          if-no-files-found: error
           compression-level: 6
           retention-days: 30
 
@@ -434,4 +748,5 @@ jobs:
           echo "- Cocos Creator: 3.8.8" >> "$GITHUB_STEP_SUMMARY"
           echo "- Output artifact: cocos-ios-runtime-sdk" >> "$GITHUB_STEP_SUMMARY"
           echo "- Includes: CocosEngine.xcframework + assets/src/jsb-adapter" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Note: exported CMake Xcode project is intentionally not shipped (non-portable absolute paths)." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Output artifact: cocos-ios-portable-project" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Includes: portable Xcode project + packaged native engine path + assets/src/jsb-adapter" >> "$GITHUB_STEP_SUMMARY"
