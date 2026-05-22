@@ -155,6 +155,7 @@ jobs:
           fi
 
           echo "Using static library target: $PICKED_TARGET"
+          echo "Building iphoneos static lib..."
           if ! xcodebuild \
             -project "$XCODEPROJ" \
             -target "$PICKED_TARGET" \
@@ -165,11 +166,13 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=14.5 \
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
-            build > "$LOG_DIR/build-${PICKED_TARGET// /_}-iphoneos.log" 2>&1; then
+            build 2>&1 | tee "$LOG_DIR/build-${PICKED_TARGET// /_}-iphoneos.log"; then
             echo "Device static-library build failed for target: $PICKED_TARGET"
+            tail -n 120 "$LOG_DIR/build-${PICKED_TARGET// /_}-iphoneos.log" || true
             exit 0
           fi
 
+          echo "Building iphonesimulator static lib..."
           if ! xcodebuild \
             -project "$XCODEPROJ" \
             -target "$PICKED_TARGET" \
@@ -180,8 +183,9 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=14.5 \
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
-            build > "$LOG_DIR/build-${PICKED_TARGET// /_}-iphonesimulator.log" 2>&1; then
+            build 2>&1 | tee "$LOG_DIR/build-${PICKED_TARGET// /_}-iphonesimulator.log"; then
             echo "Simulator static-library build failed for target: $PICKED_TARGET"
+            tail -n 120 "$LOG_DIR/build-${PICKED_TARGET// /_}-iphonesimulator.log" || true
             exit 0
           fi
 
