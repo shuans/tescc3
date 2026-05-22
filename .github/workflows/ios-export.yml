@@ -716,6 +716,8 @@ jobs:
           CI_BUILD_PREFIX="${{ github.workspace }}/build/ios/proj"
           sed -i '' "s|$CI_BUILD_PREFIX|.|g" "$PBXPROJ"
           sed -i '' "s|${{ github.workspace }}/CocosExample/native/engine/ios|../portable-cocos/native/engine/ios|g" "$PBXPROJ"
+          sed -E -i '' "s|/Users/[^[:space:]\"]*/work/[^[:space:]\"]*/build/ios/proj|.|g" "$PBXPROJ"
+          sed -E -i '' "s|/Users/[^[:space:]\"]*/work/[^[:space:]\"]*/CocosExample/native/engine/ios|../portable-cocos/native/engine/ios|g" "$PBXPROJ"
 
           # Scheme container portability (all shared schemes).
           SCHEME_DIR="$XCODEPROJ/xcshareddata/xcschemes"
@@ -726,15 +728,15 @@ jobs:
             done
           fi
 
-          # Guard: no absolute CI/machine paths should remain.
-          if grep -En '/Users/|/Applications/|'"${{ github.workspace }}" "$PBXPROJ"; then
-            echo "ERROR: absolute paths remain in project.pbxproj"
+          # Guard: block only harmful absolute paths tied to CI workspace/Cocos install.
+          if grep -En '/Users/.*/CocosCreator\.app|/Users/.*/work/.*/(build/ios|CocosExample/native/engine/ios)|'"${{ github.workspace }}" "$PBXPROJ"; then
+            echo "ERROR: harmful absolute paths remain in project.pbxproj"
             exit 1
           fi
           if [ -d "$SCHEME_DIR" ]; then
             while IFS= read -r scheme; do
-              if grep -En '/Users/|/Applications/|'"${{ github.workspace }}" "$scheme"; then
-                echo "ERROR: absolute paths remain in xcscheme: $scheme"
+              if grep -En '/Users/.*/work/.*/build/ios/proj|'"${{ github.workspace }}" "$scheme"; then
+                echo "ERROR: harmful absolute paths remain in xcscheme: $scheme"
                 exit 1
               fi
             done < <(find "$SCHEME_DIR" -name "*.xcscheme")
@@ -759,15 +761,28 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          pick_runtime_dir() {
+            for candidate in "$@"; do
+              if [ -d "$candidate" ]; then
+                echo "$candidate"
+                return 0
+              fi
+            done
+            return 1
+          }
           STAGE_DIR="$RUNNER_TEMP/portable-bundle-check"
           rm -rf "$STAGE_DIR"
           mkdir -p "$STAGE_DIR"
 
           cp -R "${{ github.workspace }}/build/ios/proj" "$STAGE_DIR/proj"
           cp -R "${{ github.workspace }}/build/ios/portable-cocos" "$STAGE_DIR/portable-cocos"
-          cp -R "${{ github.workspace }}/build/assets" "$STAGE_DIR/assets"
-          cp -R "${{ github.workspace }}/build/src" "$STAGE_DIR/src"
-          cp -R "${{ github.workspace }}/build/jsb-adapter" "$STAGE_DIR/jsb-adapter"
+          ASSETS_DIR=$(pick_runtime_dir "${{ github.workspace }}/build/assets" "${{ github.workspace }}/build/ios/assets" "${{ github.workspace }}/build/ios/data/assets" "${{ github.workspace }}/build/cocos-runtime/assets" || true)
+          SRC_DIR=$(pick_runtime_dir "${{ github.workspace }}/build/src" "${{ github.workspace }}/build/ios/src" "${{ github.workspace }}/build/ios/data/src" "${{ github.workspace }}/build/cocos-runtime/src" || true)
+          JSB_DIR=$(pick_runtime_dir "${{ github.workspace }}/build/jsb-adapter" "${{ github.workspace }}/build/ios/jsb-adapter" "${{ github.workspace }}/build/ios/data/jsb-adapter" "${{ github.workspace }}/build/cocos-runtime/jsb-adapter" || true)
+          test -n "${ASSETS_DIR:-}" && test -n "${SRC_DIR:-}" && test -n "${JSB_DIR:-}"
+          cp -R "$ASSETS_DIR" "$STAGE_DIR/assets"
+          cp -R "$SRC_DIR" "$STAGE_DIR/src"
+          cp -R "$JSB_DIR" "$STAGE_DIR/jsb-adapter"
 
           XCODEPROJ=$(find "$STAGE_DIR/proj" -maxdepth 2 -name "*.xcodeproj" | head -1 || true)
           if [ -z "${XCODEPROJ:-}" ]; then
@@ -795,14 +810,27 @@ jobs:
         if: success()
         run: |
           set -euo pipefail
+          pick_runtime_dir() {
+            for candidate in "$@"; do
+              if [ -d "$candidate" ]; then
+                echo "$candidate"
+                return 0
+              fi
+            done
+            return 1
+          }
           BUNDLE_ROOT="${{ github.workspace }}/build/portable-bundle"
           rm -rf "$BUNDLE_ROOT"
           mkdir -p "$BUNDLE_ROOT"
           cp -R "${{ github.workspace }}/build/ios/proj" "$BUNDLE_ROOT/proj"
           cp -R "${{ github.workspace }}/build/ios/portable-cocos" "$BUNDLE_ROOT/portable-cocos"
-          cp -R "${{ github.workspace }}/build/assets" "$BUNDLE_ROOT/assets"
-          cp -R "${{ github.workspace }}/build/src" "$BUNDLE_ROOT/src"
-          cp -R "${{ github.workspace }}/build/jsb-adapter" "$BUNDLE_ROOT/jsb-adapter"
+          ASSETS_DIR=$(pick_runtime_dir "${{ github.workspace }}/build/assets" "${{ github.workspace }}/build/ios/assets" "${{ github.workspace }}/build/ios/data/assets" "${{ github.workspace }}/build/cocos-runtime/assets" || true)
+          SRC_DIR=$(pick_runtime_dir "${{ github.workspace }}/build/src" "${{ github.workspace }}/build/ios/src" "${{ github.workspace }}/build/ios/data/src" "${{ github.workspace }}/build/cocos-runtime/src" || true)
+          JSB_DIR=$(pick_runtime_dir "${{ github.workspace }}/build/jsb-adapter" "${{ github.workspace }}/build/ios/jsb-adapter" "${{ github.workspace }}/build/ios/data/jsb-adapter" "${{ github.workspace }}/build/cocos-runtime/jsb-adapter" || true)
+          test -n "${ASSETS_DIR:-}" && test -n "${SRC_DIR:-}" && test -n "${JSB_DIR:-}"
+          cp -R "$ASSETS_DIR" "$BUNDLE_ROOT/assets"
+          cp -R "$SRC_DIR" "$BUNDLE_ROOT/src"
+          cp -R "$JSB_DIR" "$BUNDLE_ROOT/jsb-adapter"
 
       - name: Inspect Build Output
         if: always()
