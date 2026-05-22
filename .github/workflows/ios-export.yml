@@ -147,11 +147,42 @@ jobs:
             exit 0
           fi
 
-          PICKED_TARGET=$(python3 -c "import re,sys; t=open(sys.argv[1],encoding='utf-8',errors='ignore').read(); s=re.search(r'/\\* Begin PBXNativeTarget section \\*/(.*?)/\\* End PBXNativeTarget section \\*/',t,re.S); sec=s.group(1) if s else ''; m=re.search(r'name\\s*=\\s*([^;]+);(?:(?!name\\s*=).)*?productType\\s*=\\s*\"com.apple.product-type.library.static\";',sec,re.S); print((m.group(1).strip().strip('\"')) if m else '')" "$PBXPROJ" | head -1 || true)
+          PICKED_TARGET=$(awk '
+            BEGIN { in_nt=0; name=""; cand=""; fallback="" }
+            /\/\* Begin PBXNativeTarget section \*\// { in_nt=1; next }
+            /\/\* End PBXNativeTarget section \*\//   { in_nt=0 }
+            !in_nt { next }
+            {
+              if ($0 ~ /name = /) {
+                n=$0
+                sub(/^.*name = /, "", n)
+                sub(/;.*/, "", n)
+                gsub(/"/, "", n)
+                name=n
+              }
+              if ($0 ~ /productType = "com.apple.product-type.library.static"/) {
+                l=tolower(name)
+                if (fallback == "" && name != "") fallback=name
+                if (l == "cocos_engine") cand=name
+                else if (cand == "" && l ~ /(^|_)cocos(_|$)|cocos.?engine/) cand=name
+              }
+            }
+            END {
+              if (cand != "") print cand
+              else if (fallback != "") print fallback
+            }
+          ' "$PBXPROJ" | head -1 || true)
 
           if [ -z "${PICKED_TARGET:-}" ]; then
             echo "No static library target found in pbxproj, skip xcframework packaging."
             exit 0
+          fi
+          lower_target=$(echo "$PICKED_TARGET" | tr '[:upper:]' '[:lower:]')
+          if echo "$lower_target" | grep -Eq 'boost|openssl|uv|zlib|curl|webp|png|jpeg|tiff|glslang|spirv|freetype|websockets'; then
+            ALT_TARGET=$(awk 'tolower($0) ~ /name = cocos_engine;/{print "cocos_engine"; exit}' "$PBXPROJ" || true)
+            if [ -n "${ALT_TARGET:-}" ]; then
+              PICKED_TARGET="cocos_engine"
+            fi
           fi
 
           echo "Using static library target: $PICKED_TARGET"
