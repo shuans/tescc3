@@ -619,8 +619,10 @@ jobs:
             -project "$APP_DIR/CocosHostApp.xcodeproj" \
             -scheme CocosHostApp \
             -configuration Debug \
-            -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             build
 
       - name: Normalize Xcode Project Paths
