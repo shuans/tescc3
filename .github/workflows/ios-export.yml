@@ -141,15 +141,35 @@ jobs:
             exit 0
           fi
 
-          xcodebuild -list -project "$XCODEPROJ" > "$LOG_DIR/project-list.txt"
-          TARGETS=$(awk '
-            /^Targets:/{flag=1;next}
-            /^Build Configurations:/{flag=0}
-            flag && NF{print}
-          ' "$LOG_DIR/project-list.txt" | sed 's/^[[:space:]]*//')
+          xcodebuild -list -project "$XCODEPROJ" > "$LOG_DIR/project-list.txt" 2>&1 || true
+          xcodebuild -list -json -project "$XCODEPROJ" > "$LOG_DIR/project-list.json" 2>&1 || true
+
+          TARGETS=""
+          if python3 - <<'PY' "$LOG_DIR/project-list.json" > "$LOG_DIR/targets.txt" 2>/dev/null
+import json, sys
+p = sys.argv[1]
+try:
+    data = json.load(open(p))
+    for t in data.get("project", {}).get("targets", []):
+        if t:
+            print(t)
+except Exception:
+    pass
+PY
+          then
+            TARGETS=$(cat "$LOG_DIR/targets.txt" || true)
+          fi
 
           if [ -z "${TARGETS:-}" ]; then
-            echo "No targets found in project, skip xcframework packaging."
+            TARGETS=$(awk '
+              /^Targets:/{flag=1;next}
+              /^Build Configurations:/{flag=0}
+              flag && NF{print}
+            ' "$LOG_DIR/project-list.txt" | sed 's/^[[:space:]]*//' || true)
+          fi
+
+          if [ -z "${TARGETS:-}" ]; then
+            echo "No targets parsed from xcodebuild -list output, skip xcframework packaging."
             exit 0
           fi
 
