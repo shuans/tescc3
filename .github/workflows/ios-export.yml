@@ -1,80 +1,37 @@
-# =============================================================================
-# Cocos Creator 3.8.8 iOS Export CI
-# =============================================================================
-# 功能:
-#   1. 在 macOS runner 上安装 Cocos Creator 3.8.8
-#   2. 初始化 Hello World 例子项目 (从官方模板)
-#   3. 构建导出 iOS Xcode 项目
-#   4. 上传 iOS 项目产物
-#
-# Workflow:
-#   1. Install Cocos Creator 3.8.8 on macOS runner
-#   2. Initialize a Hello World example project (from official template)
-#   3. Build & export iOS Xcode project
-#   4. Upload iOS artifacts
-#
-# 必要条件 / Requirements:
-#   - macOS runner (iOS 构建必须)
-#   - Xcode (由 setup-xcode action 管理)
-#   - Cocos Creator 需要 GUI 环境 (macOS GitHub Actions runner 自带)
-#
-# 参考 / References:
-#   - https://docs.cocos.com/creator/3.8/manual/en/editor/publish/publish-in-command-line.html
-#   - https://github.com/cocos/cocos-template-hello-world
-# =============================================================================
-
 name: Cocos Creator 3.8.8 iOS Export
 
 on:
-  # 推送到 main/master 时触发
   push:
-    branches: [ "main", "master" ]
-  # 手动触发
+    branches: ["main", "master"]
   workflow_dispatch:
     inputs:
       debug:
-        description: 'Enable debug mode'
+        description: "Enable debug mode"
         type: boolean
         default: false
 
 env:
-  # Cocos Creator 3.8.8 下载地址 (来自 Cocos 官方 CDN)
   COCOS_DOWNLOAD_URL: "https://download.cocos.org/CocosCreator/v3.8.8/CocosCreator-v3.8.8-mac-010512.zip"
-  # 项目模板 (Cocos 官方 Hello World)
   TEMPLATE_REPO: "https://github.com/cocos/cocos-template-hello-world.git"
-  # iOS 构建平台标识
-  BUILD_PLATFORM: "ios"
 
-# 防止同时运行多次
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   ios-export:
-    name: "iOS Export (Cocos 3.8.8)"
-    # iOS 构建必须使用 macOS runner
+    name: "iOS Export + XCFramework (Cocos 3.8.8)"
     runs-on: macos-latest
 
     steps:
-      # -----------------------------------------------------------------------
-      # Step 1: 检出仓库
-      # -----------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # -----------------------------------------------------------------------
-      # Step 2: 安装 Xcode
-      # -----------------------------------------------------------------------
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          # 使用最新的稳定版 Xcode (16.x+)
           xcode-version: latest-stable
 
-      # -----------------------------------------------------------------------
-      # Step 3: 缓存 Cocos Creator (避免重复下载)
-      # -----------------------------------------------------------------------
       - name: Cache Cocos Creator
         id: cache-cocos
         uses: actions/cache@v4
@@ -82,332 +39,185 @@ jobs:
           path: ~/CocosCreator.app
           key: cocos-creator-3-8-8-${{ runner.os }}
 
-      # -----------------------------------------------------------------------
-      # Step 4: 下载 & 安装 Cocos Creator (仅缓存未命中时)
-      # -----------------------------------------------------------------------
       - name: Download & Install Cocos Creator 3.8.8
         if: steps.cache-cocos.outputs.cache-hit != 'true'
-        id: install-cocos
         run: |
+          set -euo pipefail
           COCOS_ZIP="/tmp/CocosCreator-3.8.8.zip"
           COCOS_EXTRACT="/tmp/CocosCreatorExtracted"
           COCOS_APP="$HOME/CocosCreator.app"
 
           if [ -d "$COCOS_APP" ]; then
-            echo "Cocos Creator already installed at $COCOS_APP"
-            echo "installed=true" >> "$GITHUB_OUTPUT"
+            echo "Cocos Creator already exists"
             exit 0
           fi
 
-          echo "Downloading Cocos Creator 3.8.8 from CDN..."
-          echo "URL: ${{ env.COCOS_DOWNLOAD_URL }}"
-
           curl -L -o "$COCOS_ZIP" "${{ env.COCOS_DOWNLOAD_URL }}" \
-            --retry 3 --retry-delay 5 \
-            --connect-timeout 30 \
-            --progress-bar
+            --retry 3 --retry-delay 5 --connect-timeout 30 --progress-bar
 
-          echo "Verifying download..."
-          if [ ! -f "$COCOS_ZIP" ] || [ ! -s "$COCOS_ZIP" ]; then
-            echo "ERROR: Download failed - file is empty or missing"
-            exit 1
-          fi
-
-          echo "Extracting Cocos Creator..."
+          test -s "$COCOS_ZIP"
           mkdir -p "$COCOS_EXTRACT"
           unzip -q "$COCOS_ZIP" -d "$COCOS_EXTRACT"
-          ls -la "$COCOS_EXTRACT/"
-
-          echo "Installing to $HOME..."
           cp -R "$COCOS_EXTRACT/CocosCreator.app" "$HOME/"
 
-          echo "Verifying installation..."
-          if [ -f "$COCOS_APP/Contents/MacOS/CocosCreator" ]; then
-            echo "Cocos Creator installed successfully"
-            ls -lh "$COCOS_APP/Contents/MacOS/CocosCreator"
-          else
-            echo "ERROR: CocosCreator binary not found after installation"
-            ls -la "$COCOS_APP/Contents/MacOS/" 2>/dev/null || echo "App directory not found"
-            exit 1
-          fi
-
+          test -x "$COCOS_APP/Contents/MacOS/CocosCreator"
           rm -rf "$COCOS_ZIP" "$COCOS_EXTRACT"
-          echo "installed=true" >> "$GITHUB_OUTPUT"
 
-      # -----------------------------------------------------------------------
-      # Step 5: 验证安装
-      # -----------------------------------------------------------------------
       - name: Verify Installation
         run: |
-          COCOS_APP="$HOME/CocosCreator.app"
-          COCOS_BIN="$COCOS_APP/Contents/MacOS/CocosCreator"
-
-          echo "=== Cocos Creator Installation Check ==="
-          if [ -d "$COCOS_APP" ]; then
-            echo "✅ App bundle: $COCOS_APP"
-          else
-            echo "❌ App bundle not found!"
-            exit 1
-          fi
-
-          if [ -x "$COCOS_BIN" ]; then
-            echo "✅ Binary: $COCOS_BIN"
-          else
-            echo "❌ Binary not found or not executable!"
-            exit 1
-          fi
-
-          # 显示版本信息
-          echo "=== App Bundle Contents ==="
-          ls -la "$COCOS_APP/Contents/MacOS/"
-
-          # 探索引擎原生目录结构 (深度)
-          echo ""
-          echo "=== Engine Native Root (depth 10, dirs only) ==="
-          ENGINE_ROOT=$(find "$COCOS_APP/Contents" -path "*/3d/engine/native" -type d 2>/dev/null | head -1)
-          if [ -z "$ENGINE_ROOT" ]; then
-            ENGINE_ROOT=$(find "$COCOS_APP/Contents" -name "native" -path "*/engine/*" -type d 2>/dev/null | head -1)
-          fi
-          if [ -n "$ENGINE_ROOT" ]; then
-            echo "ENGINE_ROOT: $ENGINE_ROOT"
-            find "$ENGINE_ROOT" -maxdepth 10 -type d 2>/dev/null | head -50
-          else
-            echo "No engine native directory found"
-          fi
-
-          echo ""
-          echo "=== Prebuilt / Library Search ==="
-          echo "--- prebuilt dirs ---"
-          find "$COCOS_APP/Contents" -path "*/prebuilt" -type d 2>/dev/null | head -10
-          echo "--- static libs (.a) ---"
-          find "$COCOS_APP/Contents" -name "*.a" -maxdepth 12 2>/dev/null | head -20
-          echo "--- xcframeworks ---"
-          find "$COCOS_APP/Contents" -name "*.xcframework" -maxdepth 12 2>/dev/null | head -10
-
-          echo ""
-          echo "=== System Info ==="
-          sw_vers
-          echo "Xcode: $(xcode-select -p)"
+          set -euo pipefail
+          COCOS_BIN="$HOME/CocosCreator.app/Contents/MacOS/CocosCreator"
+          test -x "$COCOS_BIN"
           xcodebuild -version
 
-      # -----------------------------------------------------------------------
-      # Step 6: 初始化 Hello World 例子项目
-      # -----------------------------------------------------------------------
       - name: Initialize Hello World Example Project
         run: |
+          set -euo pipefail
           PROJECT_DIR="${{ github.workspace }}/CocosExample"
 
-          # 克隆官方 Hello World 模板
-          echo "Cloning Hello World template from ${{ env.TEMPLATE_REPO }}..."
           git clone --depth 1 "${{ env.TEMPLATE_REPO }}" "$PROJECT_DIR"
-
-          if [ ! -d "$PROJECT_DIR" ]; then
-            echo "ERROR: Failed to clone template"
-            exit 1
-          fi
-
-          echo "✅ Template cloned successfully"
-
-          # 更新引擎版本到 3.8.8
-          # Cocos Creator 3.x 项目在 package.json 中记录版本
-          PKG_JSON="$PROJECT_DIR/package.json"
-          if [ -f "$PKG_JSON" ]; then
-            echo "Updating engine version in package.json..."
-            # 备份原始文件
-            cp "$PKG_JSON" "${PKG_JSON}.bak"
-
-            # 使用 Python 更新 JSON (macOS 自带 Python3)
-            python3 -c "import json; d=json.load(open('$PKG_JSON')); d['version']='3.8.8'; json.dump(d, open('$PKG_JSON','w'), indent=2)"
-            echo "Updated package.json:"
-            cat "$PKG_JSON"
-          fi
-
-          # 清理 .git 以减小上下文
           rm -rf "$PROJECT_DIR/.git"
 
-          echo ""
-          echo "=== Project Structure ==="
-          find "$PROJECT_DIR" -maxdepth 3 -not -path '*/\.*' | head -50
+          PKG_JSON="$PROJECT_DIR/package.json"
+          if [ -f "$PKG_JSON" ]; then
+            python3 -c "import json; p='$PKG_JSON'; d=json.load(open(p)); d['version']='3.8.8'; json.dump(d, open(p,'w'), indent=2)"
+          fi
 
-      # -----------------------------------------------------------------------
-      # Step 7: 构建 iOS 项目
-      #   Cocos Creator 命令行构建:
-      #   CocosCreator.app --project <path> --build "platform=ios;..."
-      #
-      #   参数说明:
-      #     - platform: ios (构建平台)
-      #     - buildPath: 输出目录 (默认 build/)
-      #     - debug: true/false (调试模式)
-      #     - stage: build | make (默认 build=生成项目文件)
-      #
-      #   注意: Cocos Creator 需要 GUI 环境,
-      #         macOS GitHub Actions runner 满足此条件
-      # -----------------------------------------------------------------------
       - name: Build for iOS
         id: build-ios
         run: |
+          set -euo pipefail
           COCOS_BIN="$HOME/CocosCreator.app/Contents/MacOS/CocosCreator"
           PROJECT_DIR="${{ github.workspace }}/CocosExample"
-          echo "=== iOS Build Configuration ==="
-          echo "Cocos Creator: $COCOS_BIN"
-          echo "Project: $PROJECT_DIR"
-          echo "Build Output: ${{ github.workspace }}/build"
-          echo "Debug: ${{ github.event.inputs.debug }}"
 
-          # 自动检测场景 UUID
-          SCENE_META=$(find "$PROJECT_DIR/assets" -name "*.scene.meta" -maxdepth 3 | head -1)
-          if [ -n "$SCENE_META" ]; then
-            SCENE_UUID=$(python3 -c "import json; print(json.load(open('$SCENE_META'))['uuid'])")
-            echo "Detected scene UUID: $SCENE_UUID"
-          else
-            echo "ERROR: No scene found in project assets!"
+          SCENE_META=$(find "$PROJECT_DIR/assets" -maxdepth 3 -name "*.scene.meta" | head -1)
+          if [ -z "$SCENE_META" ]; then
+            echo "No scene found"
             exit 1
           fi
 
-          # 生成完整构建配置
+          SCENE_UUID=$(python3 -c "import json; print(json.load(open('$SCENE_META'))['uuid'])")
+
           BUILD_CFG="${{ github.workspace }}/build-config.json"
-          python3 -c "import json; cfg = {'platform': 'ios', 'buildPath': '${{ github.workspace }}/build', 'startScene': '$SCENE_UUID', 'scenes': [{'uuid': '$SCENE_UUID'}], 'useDebug': False, 'packages': {'ios': {'packageName': 'com.cocos.example.ios'}}}; json.dump(cfg, open('$BUILD_CFG','w'), indent=2)"
+          python3 -c "import json; cfg={'platform':'ios','buildPath':'${{ github.workspace }}/build','startScene':'$SCENE_UUID','scenes':[{'uuid':'$SCENE_UUID'}],'useDebug':False,'packages':{'ios':{'packageName':'com.cocos.example.ios'}}}; json.dump(cfg, open('$BUILD_CFG','w'), indent=2)"
 
           BUILD_ARGS="configPath=$BUILD_CFG"
           if [ "${{ github.event.inputs.debug }}" = "true" ]; then
             BUILD_ARGS="${BUILD_ARGS};debug=true"
           fi
 
-          echo "Build args: $BUILD_ARGS"
-          echo "Build config:"
-          cat "$BUILD_CFG"
-
-          # 执行构建
           BUILD_EXIT_CODE=0
-          "$COCOS_BIN" \
-            --project "$PROJECT_DIR" \
-            --build "$BUILD_ARGS" \
-          2>&1 || BUILD_EXIT_CODE=$?
+          "$COCOS_BIN" --project "$PROJECT_DIR" --build "$BUILD_ARGS" 2>&1 || BUILD_EXIT_CODE=$?
 
-          # Cocos Creator 退出码:
-          #   0  / 36 = Build success
-          #   32    = Invalid build parameters
-          #   34    = Unexpected build error
           echo "exit_code=$BUILD_EXIT_CODE" >> "$GITHUB_OUTPUT"
-          echo ""
-          echo "=== Build Exit Code: $BUILD_EXIT_CODE ==="
-
           if [ "$BUILD_EXIT_CODE" -eq 32 ] || [ "$BUILD_EXIT_CODE" -eq 34 ]; then
-            echo "❌ Build failed with exit code $BUILD_EXIT_CODE"
             exit "$BUILD_EXIT_CODE"
           fi
 
-      # -----------------------------------------------------------------------
-      # Step 8: Embed CocosFramework + 修复 Xcode 项目路径
-      #   useDebug=false 使 Cocos Creator 使用预编译框架而非源码。
-      #   我们把框架拷贝到 artifact 中，并修复 path/sourceTree，
-      #   这样用户无需安装 Cocos Creator 即可编译。
-      # -----------------------------------------------------------------------
-      - name: Embed CocosFramework & Fix Xcode Project Paths
+      - name: Build Static Library + Create XCFramework
         run: |
-          PROJ_DIR="${{ github.workspace }}/build/ios/proj"
-          PBXPROJ="$PROJ_DIR/hello-world.xcodeproj/project.pbxproj"
-
-          # 1. 发现并拷贝预编译引擎库
-          echo "Discovering engine prebuilt/libraries in CocosCreator.app..."
-          COCOS_APP="$HOME/CocosCreator.app"
-          FRAMEWORKS_DST="$PROJ_DIR/Frameworks"
-
-          # 策略: 找到引擎的所有 .a/.xcframework 并拷贝, 然后修复 pbxproj 路径
-          # 先定位 engine native 根目录
-          ENGINE_ROOT=$(find "$COCOS_APP/Contents" -path "*/3d/engine/native" -type d 2>/dev/null | head -1)
-          if [ -z "$ENGINE_ROOT" ]; then
-            ENGINE_ROOT=$(find "$COCOS_APP/Contents" -name "native" -path "*/engine/*" -type d 2>/dev/null | head -1)
+          set -euo pipefail
+          IOS_BUILD_DIR="${{ github.workspace }}/build/ios"
+          PROJ_DIR="$IOS_BUILD_DIR/proj"
+          XCODEPROJ=$(find "$PROJ_DIR" -maxdepth 2 -name "*.xcodeproj" | head -1)
+          if [ -z "$XCODEPROJ" ]; then
+            echo "Xcode project not found"
+            exit 1
           fi
-          echo "ENGINE_ROOT: ${ENGINE_ROOT:-not found}"
 
-          if [ -d "$ENGINE_ROOT/prebuilt/ios" ]; then
-            echo "Found prebuilt/ios, copying..."
-            mkdir -p "$FRAMEWORKS_DST"
-            cp -R "$ENGINE_ROOT/prebuilt/ios/" "$FRAMEWORKS_DST/"
-            echo "Copied: $(du -sh "$FRAMEWORKS_DST" | cut -f1)"
-            ls -la "$FRAMEWORKS_DST/"
+          SCHEME=$(xcodebuild -list -project "$XCODEPROJ" | awk '/Schemes:/{flag=1;next} flag && NF{print; exit}' | xargs)
+          if [ -z "$SCHEME" ]; then
+            echo "Unable to detect scheme"
+            exit 1
+          fi
+
+          DERIVED="$RUNNER_TEMP/cocos-derived"
+          ARCHIVE_DEVICE="$RUNNER_TEMP/archive-device"
+          ARCHIVE_SIM="$RUNNER_TEMP/archive-sim"
+          XC_OUT="$IOS_BUILD_DIR/CocosEngine.xcframework"
+
+          xcodebuild archive \
+            -project "$XCODEPROJ" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_DEVICE" \
+            SKIP_INSTALL=NO \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+          xcodebuild archive \
+            -project "$XCODEPROJ" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS Simulator" \
+            -archivePath "$ARCHIVE_SIM" \
+            SKIP_INSTALL=NO \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+          DEVICE_FW=$(find "$ARCHIVE_DEVICE.xcarchive/Products" -name "*.framework" | head -1)
+          SIM_FW=$(find "$ARCHIVE_SIM.xcarchive/Products" -name "*.framework" | head -1)
+
+          if [ -n "$DEVICE_FW" ] && [ -n "$SIM_FW" ]; then
+            xcodebuild -create-xcframework \
+              -framework "$DEVICE_FW" \
+              -framework "$SIM_FW" \
+              -output "$XC_OUT"
           else
-            echo "No prebuilt/ios directory at $ENGINE_ROOT/prebuilt/ios"
-            echo "Searching for iOS libraries elsewhere..."
-            # 搜索 .xcframework
-            XCFRAMEWORKS=$(find "$COCOS_APP/Contents" -name "*.xcframework" -maxdepth 12 2>/dev/null)
-            if [ -n "$XCFRAMEWORKS" ]; then
-              echo "Found xcframeworks:"
-              echo "$XCFRAMEWORKS" | head -10
+            DEVICE_A=$(find "$ARCHIVE_DEVICE.xcarchive/Products" -name "*.a" | head -1)
+            SIM_A=$(find "$ARCHIVE_SIM.xcarchive/Products" -name "*.a" | head -1)
+            HEADERS=$(find "$PROJ_DIR" -type d -name "include" | head -1)
+            if [ -z "$DEVICE_A" ] || [ -z "$SIM_A" ] || [ -z "$HEADERS" ]; then
+              echo "Unable to find framework or static libraries for xcframework packaging"
+              exit 1
             fi
-            # 搜索 .a 文件 (可能属于引擎)
-            A_LIBS=$(find "$COCOS_APP/Contents" -name "*.a" -maxdepth 12 2>/dev/null | head -20)
-            if [ -n "$A_LIBS" ]; then
-              echo "Found .a libs:"
-              echo "$A_LIBS" | head -20
-            fi
-            echo "WARNING: No engine libraries found to embed"
+            xcodebuild -create-xcframework \
+              -library "$DEVICE_A" -headers "$HEADERS" \
+              -library "$SIM_A" -headers "$HEADERS" \
+              -output "$XC_OUT"
           fi
 
-          # 2. 修复绝对路径
-          echo "Fixing absolute paths for local use..."
-          CI_BUILD="${{ github.workspace }}/build/ios"
+          rm -rf "$DERIVED"
 
-          # 2a. CI 构建数据路径 → 相对 proj/ 的上级
-          sed -i '' "s|$CI_BUILD/|../|g" "$PBXPROJ"
+      - name: Package Runtime Assets
+        run: |
+          set -euo pipefail
+          OUT_DIR="${{ github.workspace }}/build/cocos-runtime"
+          mkdir -p "$OUT_DIR"
 
-          # 3. 修复 scheme 文件 (ReferencedContainer)
-          echo "Fixing scheme file..."
-          SCHEME_FILE=$(find "$PROJ_DIR/hello-world.xcodeproj" -name "*.xcscheme" 2>/dev/null | head -1)
-          if [ -f "$SCHEME_FILE" ]; then
-            sed -i '' "s|$CI_BUILD/proj/||g" "$SCHEME_FILE"
-          fi
+          for d in assets src jsb-adapter; do
+            if [ -d "${{ github.workspace }}/build/$d" ]; then
+              cp -R "${{ github.workspace }}/build/$d" "$OUT_DIR/"
+            fi
+          done
 
-          echo "✅ CocosFramework embedded + paths fixed"
+          cp -R "${{ github.workspace }}/build/ios/CocosEngine.xcframework" "$OUT_DIR/"
 
-      # -----------------------------------------------------------------------
-      # Step 9: 检查构建产物
-      # -----------------------------------------------------------------------
       - name: Inspect Build Output
         if: always()
         run: |
           BUILD_DIR="${{ github.workspace }}/build"
-          echo "=== Build Output Structure ==="
           if [ -d "$BUILD_DIR" ]; then
-            echo "Top-level contents:"
-            ls -la "$BUILD_DIR/"
-            echo ""
-            echo "Directory tree (depth 4):"
-            find "$BUILD_DIR" -maxdepth 4 2>/dev/null | sort
+            find "$BUILD_DIR" -maxdepth 4 | sort
           else
-            echo "❌ Build directory not found!"
+            echo "build directory not found"
           fi
 
-      # -----------------------------------------------------------------------
-      # Step 9: 上传 iOS Xcode 项目为构建产物
-      #   产物包含:
-      #     - Xcode 项目文件 (.xcodeproj)
-      #     - 游戏资源 (data/)
-      #     - CMake 配置
-      #     - 编译脚本
-      #
-      #   下载后可在本地用 Xcode 打开编译:
-      #     open build/ios/proj/xxx.xcodeproj
-      # -----------------------------------------------------------------------
-      - name: Upload iOS Xcode Project
+      - name: Upload iOS Runtime SDK Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          # 产物名称
-          name: cocos-ios-xcode-project
-          # 上传整个构建目录 (包含 proj/, data/, 等)
-          path: build/
-          # 如果没有构建产物, 也允许上传 (避免步骤失败)
+          name: cocos-ios-runtime-sdk
+          path: |
+            build/cocos-runtime/
+            build/ios/proj/
           if-no-files-found: warn
-          # 压缩级别 (0-9)
           compression-level: 6
-          # 保留天数 (默认 90)
           retention-days: 30
 
-      # -----------------------------------------------------------------------
-      # Step 10: 上传 Log (便于调试)
-      # -----------------------------------------------------------------------
       - name: Upload Build Logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -419,41 +229,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # -----------------------------------------------------------------------
-      # Step 11: 总结
-      # -----------------------------------------------------------------------
       - name: Build Summary
         if: always()
         run: |
-          echo "## iOS Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Cocos Creator | 3.8.8 ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Example Project | Hello World ✅ |" >> $GITHUB_STEP_SUMMARY
-
-          BUILD_DIR="${{ github.workspace }}/build"
-          if [ -d "$BUILD_DIR" ]; then
-            # 找到 Xcode 项目文件
-            XCODE_PROJ=$(find "$BUILD_DIR" -name "*.xcodeproj" -maxdepth 4 | head -1)
-            echo "| iOS Export | ✅ |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Build Artifacts" >> $GITHUB_STEP_SUMMARY
-            echo "- **cocos-ios-xcode-project**: iOS Xcode 项目" >> $GITHUB_STEP_SUMMARY
-            echo "- **build-logs**: Cocos Creator 构建日志" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            if [ -n "$XCODE_PROJ" ]; then
-              REL_PATH="${XCODE_PROJ#${{ github.workspace }}/}"
-              echo "### Xcode Project" >> $GITHUB_STEP_SUMMARY
-              echo "产物路径: \`$REL_PATH\`" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo '```bash' >> $GITHUB_STEP_SUMMARY
-              echo "# 下载 artifact 后解压并打开 Xcode 项目" >> $GITHUB_STEP_SUMMARY
-              echo "unzip cocos-ios-xcode-project.zip" >> $GITHUB_STEP_SUMMARY
-              echo "cd $(dirname $REL_PATH)" >> $GITHUB_STEP_SUMMARY
-              echo "open *.xcodeproj" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "| iOS Export | ❌ (build directory not found) |" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "## iOS Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Cocos Creator: 3.8.8" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Output artifact: cocos-ios-runtime-sdk" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Includes: CocosEngine.xcframework + assets/src/jsb-adapter + iOS proj" >> "$GITHUB_STEP_SUMMARY"
