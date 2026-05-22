@@ -633,8 +633,13 @@ jobs:
             echo "WARNING: iphoneos SDK not available on this runner, skip host xcodebuild validation."
             exit 0
           fi
-          if ! xcodebuild -showdestinations -project "$APP_DIR/CocosHostApp.xcodeproj" -scheme CocosHostApp 2>/dev/null | grep -q "platform:iOS"; then
+          DEST_OUT=$(xcodebuild -showdestinations -project "$APP_DIR/CocosHostApp.xcodeproj" -scheme CocosHostApp 2>&1 || true)
+          if ! echo "$DEST_OUT" | grep -q "platform:iOS"; then
             echo "WARNING: iOS destination not available for host validation, skip."
+            exit 0
+          fi
+          if echo "$DEST_OUT" | grep -Eq "Ineligible destinations|error:iOS .* not installed"; then
+            echo "WARNING: iOS destination is ineligible on this runner, skip host validation."
             exit 0
           fi
           xcodebuild \
@@ -805,15 +810,41 @@ jobs:
             echo "WARNING: iphoneos SDK not available, skip portable validation build."
             exit 0
           fi
+          DEST_OUT=$(xcodebuild -showdestinations -project "$XCODEPROJ" -alltargets 2>&1 || true)
+          if ! echo "$DEST_OUT" | grep -q "platform:iOS"; then
+            echo "WARNING: iOS destination not available for portable validation, skip."
+            exit 0
+          fi
+          if echo "$DEST_OUT" | grep -Eq "Ineligible destinations|error:iOS .* not installed"; then
+            echo "WARNING: iOS destination is ineligible on this runner, skip portable validation."
+            exit 0
+          fi
+
+          TARGET_LIST=$(xcodebuild -list -project "$XCODEPROJ" 2>/dev/null | awk '
+            BEGIN { in_targets=0 }
+            /^Targets:/ { in_targets=1; next }
+            /^[^[:space:]]/ && $0 !~ /^Targets:/ { in_targets=0 }
+            in_targets && /^[[:space:]]+/ {
+              t=$0
+              sub(/^[[:space:]]+/, "", t)
+              if (t != "") print t
+            }
+          ')
+          if [ -z "${TARGET_LIST:-}" ]; then
+            echo "WARNING: no targets found in staged portable bundle; skip validation build."
+            exit 0
+          fi
 
           BUILD_OK=0
-          while IFS= read -r scheme_path; do
-            scheme_name=$(basename "$scheme_path" .xcscheme)
-            [ -n "$scheme_name" ] || continue
-            echo "Trying portable validation scheme: $scheme_name"
+          while IFS= read -r target_name; do
+            [ -n "$target_name" ] || continue
+            case "$target_name" in
+              ALL_BUILD|ZERO_CHECK|genbindings|cocos_engine) continue ;;
+            esac
+            echo "Trying portable validation target: $target_name"
             if xcodebuild \
               -project "$XCODEPROJ" \
-              -scheme "$scheme_name" \
+              -target "$target_name" \
               -configuration Debug \
               -sdk iphoneos \
               -destination 'generic/platform=iOS' \
@@ -823,10 +854,10 @@ jobs:
               BUILD_OK=1
               break
             fi
-          done < <(find "$XCODEPROJ/xcshareddata/xcschemes" -name "*.xcscheme" | sort)
+          done <<< "$TARGET_LIST"
 
           if [ "$BUILD_OK" -ne 1 ]; then
-            echo "WARNING: no buildable shared scheme succeeded in staged portable bundle; continue packaging."
+            echo "WARNING: no buildable app target succeeded in staged portable bundle; continue packaging."
           fi
 
       - name: Assemble Portable Artifact Bundle
